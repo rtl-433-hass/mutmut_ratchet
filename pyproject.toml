@@ -25,6 +25,9 @@ classifiers = [
 # lazily, so `ratchet` and `targets` still work if it is missing.
 dependencies = ["mutmut>=3.6"]
 
+[project.scripts]
+mutmut-ratchet = "mutmut_ratchet.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/rtl-433-hass/mutmut-ratchet"
 Repository = "https://github.com/rtl-433-hass/mutmut-ratchet"
