@@ -156,14 +156,31 @@ RTL_433 = ConsumerProfile(
     ),
 )
 
-# Transcribed from rtl-433-hass/pyrtl_433 scripts/mutation_targets.py.
+# Every module of pyrtl_433's ``library`` subpackage, shared by its three tests.
+_PYRTL_433_LIBRARY = [
+    "library/__init__.py",
+    "library/_loader.py",
+    "library/_model.py",
+    "library/_overrides.py",
+    "library/_transform.py",
+]
+
+# Transcribed from rtl-433-hass/pyrtl_433's [tool.mutmut_ratchet] config.
 PYRTL_433 = ConsumerProfile(
     name="pyrtl_433",
     package_path="pyrtl_433",
     modules=(
         "__init__.py",
         "_urls.py",
+        "autolevel.py",
+        "availability.py",
         "client.py",
+        "library/__init__.py",
+        "library/_loader.py",
+        "library/_model.py",
+        "library/_overrides.py",
+        "library/_transform.py",
+        "naming.py",
         "normalizer.py",
         "replay.py",
         "sdr.py",
@@ -172,19 +189,26 @@ PYRTL_433 = ConsumerProfile(
         "pyproject.toml",
         "uv.lock",
         "tests/conftest.py",
-        "scripts/mutation_stats.py",
-        "scripts/mutation_ratchet.py",
-        "scripts/mutation_targets.py",
     ),
     explicit_test_sources={
         "tests/test_urls.py": ["_urls.py"],
         "tests/test_mut_client_floor.py": ["client.py"],
+        "tests/test_library.py": _PYRTL_433_LIBRARY,
+        "tests/test_mut_library.py": _PYRTL_433_LIBRARY,
+        "tests/test_mut_library_floor.py": _PYRTL_433_LIBRARY,
     },
     conforming_tests={
         "tests/test_normalizer.py": "normalizer.py",
         "tests/test_mut_client.py": "client.py",
         "tests/test_replay.py": "replay.py",
+        "tests/test_naming.py": "naming.py",
+        "tests/test_availability.py": "availability.py",
     },
+    broad_tests=(
+        # Sweeps every JSON fixture through the normalizer and the whole device
+        # library, so a change to it is correctly a full run.
+        "tests/test_fixture_coverage.py",
+    ),
 )
 
 PROFILES = (RTL_433, PYRTL_433)
