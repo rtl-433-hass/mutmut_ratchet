@@ -1,0 +1,117 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mutmut-ratchet"
+version = "0.1.0"
+description = "Shared mutmut CI tooling: PR scoping, time-balanced sharding, and a per-file mutation-score ratchet."
+readme = "README.md"
+requires-python = ">=3.14"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Andrew Berry" }]
+keywords = ["mutmut", "mutation-testing", "ci", "ratchet", "sharding", "pytest"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Software Development :: Quality Assurance",
+]
+# mutmut is a real runtime import: `stats`, `timings` and `shards` read mutmut's
+# own module walk and per-file meta through `mutmut.__main__`. It is imported
+# lazily, so `ratchet` and `targets` still work if it is missing.
+dependencies = ["mutmut>=3.6"]
+
+[project.urls]
+Homepage = "https://github.com/rtl-433-hass/mutmut-ratchet"
+Repository = "https://github.com/rtl-433-hass/mutmut-ratchet"
+Issues = "https://github.com/rtl-433-hass/mutmut-ratchet/issues"
+
+# uv-first dev tooling: `uv sync` installs this group by default; `uv run <tool>`
+# executes them. There are no pip-style requirements*.txt files.
+[dependency-groups]
+dev = [
+    "pytest>=9",
+    "pytest-cov>=7",
+    "pytest-xdist>=3",
+    "ruff==0.16.0",
+    "mypy>=1.19",
+]
+
+[tool.setuptools]
+packages = ["mutmut_ratchet"]
+
+[tool.setuptools.package-data]
+mutmut_ratchet = ["py.typed"]
+
+[tool.mypy]
+strict = true
+files = ["mutmut_ratchet"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q --strict-markers"
+filterwarnings = [
+    # Treat warnings as errors to catch issues early
+    "error",
+]
+
+[tool.coverage.run]
+source = ["mutmut_ratchet"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "@overload",
+]
+
+[tool.ruff]
+# Based on https://github.com/home-assistant/core/blob/dev/pyproject.toml
+target-version = "py314"
+line-length = 88
+
+[tool.ruff.lint]
+select = [
+    "B",   # flake8-bugbear
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "SIM", # flake8-simplify
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501", # line too long (handled by the formatter)
+]
+
+[tool.ruff.lint.isort]
+force-sort-within-sections = true
+known-first-party = ["mutmut_ratchet"]
+combine-as-imports = true
+split-on-trailing-comma = false
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = [
+    "S101",    # assert is fine in tests
+    "PLR2004", # Magic values are fine in tests
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+docstring-code-format = true
+
+# This project's own tooling config. It is not mutation-tested in CI (the scope
+# is deliberately small), but the block below is the worked example the README
+# documents, and keeps `mutmut-ratchet` runnable against this repo by hand.
+[tool.mutmut_ratchet]
+package_path = "mutmut_ratchet"
+escalate_paths = ["pyproject.toml", "uv.lock", "tests/conftest.py"]

@@ -1,0 +1,23 @@
+mutmut-ratchet
+Copyright 2026 Andrew Berry
+
+This product includes software extracted from two repositories in the
+rtl-433-hass organisation, both licensed under the Apache License, Version 2.0:
+
+  - rtl-433-hass/rtl_433   (https://github.com/rtl-433-hass/rtl_433)
+  - rtl-433-hass/pyrtl_433 (https://github.com/rtl-433-hass/pyrtl_433)
+
+The code originated as the near-identical `scripts/mutation_*.py` helpers and
+their tests carried by both repositories:
+
+  - scripts/mutation_ratchet.py
+  - scripts/mutation_shards.py
+  - scripts/mutation_stats.py
+  - scripts/mutation_targets.py
+  - scripts/mutation_timings.py
+  - tests/test_mutation_shards.py
+  - tests/test_mutation_targets.py
+
+Only the per-repository constants (package paths, escalation triggers, and the
+explicit test-to-source overrides) differed; those became configuration read
+from the consumer's pyproject.toml.

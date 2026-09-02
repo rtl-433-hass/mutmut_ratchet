@@ -1,0 +1,40 @@
+# mutmut mutation-testing working copy, cache, and exported stats
+mutants/
+.mutmut-cache
+mutation-stats.json
+stats.json
+
+# Virtual environments
+.venv/
+venv/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Development tool caches
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# Coverage reports
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# AI agent / worktree scratch
+.claude/worktrees
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+*~
