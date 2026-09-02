@@ -48,7 +48,8 @@ class ConsumerProfile:
         )
 
 
-# Transcribed from rtl-433-hass/rtl_433 scripts/mutation_targets.py.
+# Transcribed from rtl-433-hass/rtl_433 pyproject.toml [tool.mutmut_ratchet]
+# (post-migration: the mapping/ modules now live in pyrtl_433.library).
 RTL_433 = ConsumerProfile(
     name="rtl_433",
     package_path="custom_components/rtl_433",
@@ -66,11 +67,6 @@ RTL_433 = ConsumerProfile(
         "event.py",
         "hub_settings.py",
         "library.py",
-        "mapping/__init__.py",
-        "mapping/_loader.py",
-        "mapping/_model.py",
-        "mapping/_overrides.py",
-        "mapping/_transform.py",
         "migration.py",
         "number.py",
         "options_flow.py",
@@ -84,9 +80,6 @@ RTL_433 = ConsumerProfile(
         "pyproject.toml",
         "requirements_test.txt",
         "tests/conftest.py",
-        "scripts/mutation_stats.py",
-        "scripts/mutation_ratchet.py",
-        "scripts/mutation_targets.py",
         ".github/workflows/mutation.yml",
     ),
     explicit_test_sources={
@@ -104,32 +97,9 @@ RTL_433 = ConsumerProfile(
             "sdr_settings.py",
         ],
         "tests/test_sdr_settings_adapter.py": ["sdr_settings.py"],
-        "tests/test_mapping.py": [
-            "mapping/__init__.py",
-            "mapping/_loader.py",
-            "mapping/_model.py",
-            "mapping/_overrides.py",
-            "mapping/_transform.py",
-        ],
-        "tests/test_mut_mapping.py": [
-            "mapping/__init__.py",
-            "mapping/_loader.py",
-            "mapping/_model.py",
-            "mapping/_overrides.py",
-            "mapping/_transform.py",
-        ],
-        "tests/test_mut_mapping_floor.py": [
-            "mapping/__init__.py",
-            "mapping/_loader.py",
-            "mapping/_model.py",
-            "mapping/_overrides.py",
-            "mapping/_transform.py",
-        ],
-        "tests/test_fixture_coverage.py": [
-            "mapping/__init__.py",
-            "mapping/_loader.py",
-            "mapping/_model.py",
-        ],
+        # Data-driven sweep over pyrtl_433.library (not mutated here): scopes to
+        # no source module rather than escalating.
+        "tests/test_fixture_coverage.py": [],
         "tests/test_mut_calibration_floor.py": ["calibration.py"],
         "tests/test_mut_library_floor.py": ["library.py"],
         "tests/test_mut_migration_floor.py": ["migration.py"],
