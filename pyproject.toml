@@ -40,7 +40,7 @@ dev = [
     "pytest>=9",
     "pytest-cov>=7",
     "pytest-xdist>=3",
-    "ruff==0.16.0",
+    "ruff==0.16.5",
     "mypy>=1.19",
 ]
 
