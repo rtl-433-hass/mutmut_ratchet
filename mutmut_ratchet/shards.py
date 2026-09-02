@@ -46,7 +46,7 @@ from pathlib import Path
 import sys
 from typing import IO
 
-from .config import DEFAULT_FALLBACK_SECONDS_PER_MUTANT, Config
+from .config import DEFAULT_FALLBACK_SECONDS_PER_MUTANT, Config, patterns_for
 
 __all__ = [
     "load_counts",
@@ -135,31 +135,6 @@ def partition(n: int, modules: list[str], weights: dict[str, float]) -> list[lis
         bins[j].append(path)
         loads[j] += weight(path)
     return [sorted(b) for b in bins]
-
-
-def patterns_for(paths: list[str], config: Config) -> list[str]:
-    """Derive mutmut dotted filter patterns from source paths.
-
-    A normal module ``a/b.py`` matches ``<pkg>.a.b.*``.
-
-    A package ``__init__.py`` is special: mutmut strips the ``__init__`` segment
-    from its mutant names (``get_mutant_name`` does ``.replace('.__init__.', '.')``),
-    so the package-root mutants live directly under the package's dotted name —
-    e.g. ``<pkg>.x_async_setup_entry__mutmut_1``. A bare ``<pkg>.*`` would also
-    match every *submodule*, so instead we match only the mutant trampolines,
-    which mutmut names ``x_*`` (functions) and ``xǁ*`` (class methods); no module
-    name starts with those, so this matches exactly the package-root mutants and
-    nothing else.
-    """
-    patterns: list[str] = []
-    for p in paths:
-        dotted = config.dotted(p)
-        if dotted.endswith(".__init__"):
-            base = dotted[: -len(".__init__")]
-            patterns += [f"{base}.x_*", f"{base}.xǁ*"]
-        else:
-            patterns.append(f"{dotted}.*")
-    return patterns
 
 
 def shard_for(

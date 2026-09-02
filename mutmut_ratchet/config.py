@@ -31,6 +31,7 @@ __all__ = [
     "ConfigError",
     "find_pyproject",
     "load_config",
+    "patterns_for",
 ]
 
 #: Committed per-file mutation-score baseline, relative to the project root.
@@ -91,6 +92,32 @@ class Config:
         """Dotted mutmut module name for a repo-relative source ``path``."""
         stem = path[len(self.package_path) + 1 : -len(".py")]
         return f"{self.package_dotted}.{stem.replace('/', '.')}"
+
+
+def patterns_for(paths: list[str], config: Config) -> list[str]:
+    """Derive the ``mutmut run`` filter patterns that select ``paths``.
+
+    A normal module ``a/b.py`` matches ``<pkg>.a.b.*``.
+
+    A package ``__init__.py`` is special: mutmut strips the ``__init__`` segment
+    from its mutant names (``get_mutant_name`` does ``.replace('.__init__.', '.')``),
+    so the package-root mutants live directly under the package's dotted name —
+    e.g. ``<pkg>.sub.x_lookup__mutmut_1``. The naive ``<pkg>.sub.__init__.*``
+    therefore matches *no mutant at all*: every package-root mutant would go
+    unrun and score 0. A bare ``<pkg>.sub.*`` would over-match (it also catches
+    every submodule), so instead we match only the mutant trampolines, which
+    mutmut names ``x_*`` (functions) and ``xǁ*`` (class methods); no module name
+    starts with those, so this selects exactly the package-root mutants.
+    """
+    patterns: list[str] = []
+    for p in paths:
+        dotted = config.dotted(p)
+        if dotted.endswith(".__init__"):
+            base = dotted[: -len(".__init__")]
+            patterns += [f"{base}.x_*", f"{base}.xǁ*"]
+        else:
+            patterns.append(f"{dotted}.*")
+    return patterns
 
 
 # Keys accepted in ``[tool.mutmut_ratchet]``; anything else is a typo, and a

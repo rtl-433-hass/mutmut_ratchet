@@ -31,6 +31,11 @@ Output (stdout), three lines:
     line 2: space-separated mutmut filter patterns (empty when nothing in scope)
     line 3: space-separated source paths (empty when nothing in scope)
 
+Line 2 is derived by :func:`mutmut_ratchet.config.patterns_for`, which the
+sharder shares, so a package ``__init__.py`` in scope gets the trampoline
+patterns that actually match its mutants rather than a ``.__init__.*`` filter
+that matches none of them.
+
 A ``scoped`` mode with empty lines 2/3 means "no source in scope" — the caller
 should pass (e.g. a docs-only PR).
 """
@@ -41,7 +46,7 @@ from pathlib import Path
 import sys
 from typing import IO
 
-from .config import Config
+from .config import Config, patterns_for
 
 __all__ = ["resolve", "run", "source_for_test"]
 
@@ -104,7 +109,7 @@ def run(changed: list[str], config: Config, *, stdout: IO[str] | None = None) ->
         print("", file=stream)
         return 0
     paths = sorted(sources)
-    patterns = [f"{config.dotted(p)}.*" for p in paths]
+    patterns = patterns_for(paths, config)
     print("scoped", file=stream)
     print(" ".join(patterns), file=stream)
     print(" ".join(paths), file=stream)

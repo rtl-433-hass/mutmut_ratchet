@@ -15,10 +15,10 @@ from __future__ import annotations
 import io
 from pathlib import Path
 
-from consumers import PROFILES, ConsumerProfile, make_repo
+from consumers import PROFILES, PYRTL_433, ConsumerProfile, make_repo
 import pytest
 
-from mutmut_ratchet.config import Config, load_config
+from mutmut_ratchet.config import Config, load_config, patterns_for
 from mutmut_ratchet.targets import resolve, run, source_for_test
 
 
@@ -135,10 +135,10 @@ def test_scoped_output_is_three_lines_of_patterns_and_paths(
     mode, patterns, paths = _capture(changed, config)[:3]
     assert mode == "scoped"
     assert paths.split() == sorted(changed)
-    # The targets resolver derives patterns uniformly, including for a package
-    # ``__init__`` (the sharder is the piece that special-cases those).
-    assert patterns.split() == [f"{config.dotted(p)}.*" for p in sorted(changed)]
-    assert f"{config.package_dotted}.__init__.*" in patterns.split()
+    # Patterns come from the same derivation the sharder uses, so a package
+    # ``__init__`` in scope is matched by its trampoline patterns.
+    assert patterns.split() == patterns_for(sorted(changed), config)
+    assert f"{config.package_dotted}.__init__.*" not in patterns.split()
 
 
 def test_full_run_output_is_all_plus_two_blank_lines(
@@ -183,3 +183,37 @@ def test_test_mut_prefix_is_stripped_before_test(repo: Path, config: Config) -> 
     module = config.package_path
     (Path(module) / "widget.py").write_text("", encoding="utf-8")
     assert source_for_test("test_mut_widget", config) == config.source("widget.py")
+
+
+@pytest.mark.parametrize(
+    "module, expected",
+    [
+        ("normalizer.py", ["{pkg}.normalizer.*"]),
+        ("library/_loader.py", ["{pkg}.library._loader.*"]),
+        # A package ``__init__.py`` *is* the package as far as mutmut mutant
+        # names go, so it must never produce a ``....__init__.*`` pattern: that
+        # matches no mutant, and the module would silently run zero of them.
+        ("library/__init__.py", ["{pkg}.library.x_*", "{pkg}.library.x\u01c1*"]),
+        ("__init__.py", ["{pkg}.x_*", "{pkg}.x\u01c1*"]),
+    ],
+)
+def test_scoped_patterns_never_name_an_init_module(
+    tmp_path: Path, module: str, expected: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: ``pyrtl_433/library/__init__.py`` matched zero mutants.
+
+    mutmut strips the ``__init__`` segment from mutant names, so a subpackage
+    root's mutants are named ``<pkg>.library.x_lookup__mutmut_1``. Scoping a PR
+    to that file with a ``<pkg>.library.__init__.*`` filter ran nothing while
+    still reporting success, so the per-file floor was silently unenforced.
+    """
+    make_repo(tmp_path, PYRTL_433)
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config(tmp_path / "pyproject.toml")
+    pkg = cfg.package_dotted
+    changed = cfg.source(module)
+    assert _capture([changed], cfg)[:3] == [
+        "scoped",
+        " ".join(e.format(pkg=pkg) for e in expected),
+        changed,
+    ]

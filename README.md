@@ -101,6 +101,12 @@ Maps changed paths to targets. With no arguments, reads whitespace-separated
 paths from stdin. Prints three lines: `all` or `scoped`; the mutmut filter
 patterns; the source paths. Exit 0.
 
+Patterns are derived the same way `shards` derives them, so a package
+`__init__.py` in scope emits the `x_*` / `xǁ*` trampoline patterns its
+mutants are actually named after — mutmut drops the `__init__` segment from
+mutant names, so a `<pkg>.sub.__init__.*` filter would match none of them and
+silently run zero mutants.
+
 ```
 mutmut-ratchet shards --shard N --of M [--restrict PATH ...] [--baseline P] [--timings P]
 ```
