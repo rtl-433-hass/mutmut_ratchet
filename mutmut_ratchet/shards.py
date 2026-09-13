@@ -20,10 +20,14 @@ each is placed into the currently-lightest bin (ties by lowest index) — the
 classic LPT heuristic: within 4/3 of optimal makespan and, with fixed sort/tie-
 break keys, fully reproducible (no randomness, no wall-clock).
 
-**Output contract (two lines):**
+**Output contract (three lines):**
     line 1: space-separated mutmut filter patterns for the requested shard
     line 2: space-separated source paths for the requested shard
-Both lines are empty when the shard received no modules.
+    line 3: space-separated fully-qualified functions this shard will mutate,
+            for ``stats --functions``; empty unless ``--restrict-functions`` was
+            given, and empty too when the set could not be determined (which
+            means "do not filter the per-function block")
+All three lines are empty when the shard received no modules.
 
 Run from the repository root, e.g. for an 8-way split, the first shard::
 
@@ -36,19 +40,28 @@ full run: the partition is still computed over every module (so each module keep
 its stable shard), but only the in-scope modules that fall in this shard are
 emitted. The union across all shards of ``shard ∩ restrict`` equals ``restrict``,
 so coverage of the scoped set stays complete and disjoint. A shard whose
-intersection is empty emits two blank lines (and the caller skips it).
+intersection is empty emits three blank lines (and the caller skips it).
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 import json
 from pathlib import Path
 import sys
 from typing import IO
 
-from .config import DEFAULT_FALLBACK_SECONDS_PER_MUTANT, Config, patterns_for
+from .config import (
+    DEFAULT_FALLBACK_SECONDS_PER_MUTANT,
+    Config,
+    function_patterns_for,
+    module_dotted_for_mutants,
+    patterns_for,
+)
+from .functions import MANGLED_PREFIXES
 
 __all__ = [
+    "functions_in",
     "load_counts",
     "load_timings",
     "mutable_modules",
@@ -160,16 +173,45 @@ def shard_for(
     return paths
 
 
+def functions_in(path: str, functions: Iterable[str], config: Config) -> list[str]:
+    """The *mangled* names among ``functions`` that belong to ``path``.
+
+    ``functions`` are fully qualified; the module prefix is stripped so the
+    result can go straight to :func:`function_patterns_for`, which is the one
+    place that knows how a mutant pattern is spelled.
+
+    A name belongs to a module when it is that module's dotted prefix followed by
+    a mangled function name. Testing for the mangled prefix on what remains is
+    what separates a function from a submodule: ``pkg.a.x_f`` is a function of
+    ``pkg/a.py``, while ``pkg.a.b.x_f`` is a function of ``pkg/a/b.py`` and must
+    not be claimed by ``pkg/a.py``.
+    """
+    prefix = f"{module_dotted_for_mutants(path, config)}."
+    found = [
+        name[len(prefix) :]
+        for name in functions
+        if name.startswith(prefix) and name[len(prefix) :].startswith(MANGLED_PREFIXES)
+    ]
+    return sorted(found)
+
+
 def run(
     config: Config,
     shard: int,
     of: int,
     *,
     restrict: list[str] | None = None,
+    restrict_functions: list[str] | None = None,
     stdout: IO[str] | None = None,
     stderr: IO[str] | None = None,
 ) -> int:
-    """Emit this shard's patterns and paths. Returns 2 on invalid shard bounds."""
+    """Emit this shard's patterns and paths.
+
+    Returns 2 on invalid shard bounds. ``restrict_functions`` narrows the emitted
+    patterns from whole modules to those functions, for a function-scoped run;
+    a module in this shard that none of them name keeps its whole-module pattern,
+    so a partially narrowed scope stays correct rather than silently dropping it.
+    """
     stream = sys.stdout if stdout is None else stdout
     errors = sys.stderr if stderr is None else stderr
 
@@ -184,6 +226,15 @@ def run(
         return 2
 
     paths = shard_for(config, shard, of, restrict=restrict)
-    print(" ".join(patterns_for(paths, config)), file=stream)
+
+    patterns: list[str] = []
+    for path in paths:
+        mine = functions_in(path, restrict_functions or [], config)
+        patterns.extend(
+            function_patterns_for(path, mine, config)
+            if mine
+            else patterns_for([path], config)
+        )
+    print(" ".join(patterns), file=stream)
     print(" ".join(paths), file=stream)
     return 0

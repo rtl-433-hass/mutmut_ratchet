@@ -99,7 +99,8 @@ mutmut-ratchet targets [--base REF] [PATH ...]
 ```
 Maps changed paths to targets. With no arguments, reads whitespace-separated
 paths from stdin. Prints four lines: `all` or `scoped`; the mutmut filter
-patterns; the source paths; and the functions the run will mutate. Exit 0.
+patterns; the source paths; and the functions the scope was narrowed *to*
+(empty when nothing was). Exit 0.
 
 `--base REF` narrows the scope to the **changed functions** rather than whole
 modules, by diffing against `REF` and mapping each hunk to the function that
@@ -114,6 +115,13 @@ instead of all of it. Three rules keep that sound:
 * No line information at all (no `--base`, or git cannot answer) falls back to
   whole modules, never to an empty filter.
 
+Line 4 feeds `shards --restrict-functions`. A module that stays whole
+contributes nothing to it — the shard falls back to that module's own pattern
+when no name mentions it — so this never has to enumerate a file's functions.
+
+The diff is only taken once the scope is known to be narrowable, and only over
+the sources in it, so an escalated or docs-only PR never pays for it.
+
 Function-scoped runs need `--mode functions` to gate; see below.
 
 Patterns are derived the same way `shards` derives them, so a package
@@ -123,24 +131,29 @@ mutant names, so a `<pkg>.sub.__init__.*` filter would match none of them and
 silently run zero mutants.
 
 ```
-mutmut-ratchet shards --shard N --of M [--restrict PATH ...] [--baseline P] [--timings P]
+mutmut-ratchet shards --shard N --of M [--restrict PATH ...] [--restrict-functions NAME ...] [--baseline P] [--timings P]
 ```
-Prints two lines: this shard's filter patterns, and its source paths (both blank
+Prints two lines: this shard's filter patterns and its source paths (both blank
 for an empty shard). `--restrict` intersects the shard with a scoped set without
 changing the global assignment, so a scoped PR fans across the same shards.
-Exit 0, or 2 for out-of-range `--shard`/`--of`.
+`--restrict-functions` (line 4 of `targets --base`) narrows the patterns
+further, to those functions; a module in the shard that none of them name keeps
+its whole-module pattern. Exit 0, or 2 for out-of-range `--shard`/`--of`.
 
 ```
-mutmut-ratchet stats [--paths PATH ...] [--functions NAME ...]
+mutmut-ratchet stats [--paths PATH ...]
 ```
 Prints the stats JSON on stdout, with a `files` block and a `functions` block
 (`{path: {function: tally}}`). `--paths` is **required after a filtered `mutmut
 run`**: mutants outside the filter stay "not checked", which would otherwise
-read as 0%. `--functions` does the same for the per-function block after a
-function-scoped run — pass line 4 of `targets` output. Each function tally also
-reports `not_checked`, the subset of `survived` mutmut never executed, so a
-caller without an explicit list can still tell "no test killed this" from "this
-was never attempted". Exit 0.
+read as 0%. Exit 0.
+
+Every tally also reports `not_checked` — the subset of `survived` that mutmut
+recorded but never executed. That is what a *function*-scoped run needs: no
+list of what the run covered has to be threaded in from outside, because a
+function whose mutants are entirely not-checked was plainly not measured, and
+`--mode functions` skips it. It is also how a partial file tally is kept out of
+the baseline.
 
 ```
 mutmut-ratchet ratchet --mode floor|strict|functions --stats FILE [--baseline P] [--update] [--tolerance-fraction F] [--tolerance-mutants N] [--tolerance-survivors N]

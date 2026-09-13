@@ -107,8 +107,9 @@ def test_targets_dispatch(repo: Path, profile: ConsumerProfile) -> None:
         "scoped",
         f"{profile.package_dotted}.{profile.modules[-1][: -len('.py')]}.*",
         module,
+        "",
     ]
-    assert call("targets", "pyproject.toml")[1].splitlines() == ["all", "", ""]
+    assert call("targets", "pyproject.toml")[1].splitlines() == ["all", "", "", ""]
 
 
 def test_targets_reads_stdin_when_no_paths_are_given(
@@ -155,7 +156,7 @@ def test_stats_dispatch(repo: Path, profile: ConsumerProfile) -> None:
     assert json.loads(out)["files"][source]["killed"] == 1
     code, out, _ = call("stats", "--paths", "nothing.py")
     assert code == 0
-    assert json.loads(out) == {"files": {}}
+    assert json.loads(out) == {"files": {}, "functions": {}}
 
 
 def test_timings_dispatch(repo: Path, profile: ConsumerProfile) -> None:
@@ -251,7 +252,12 @@ def test_package_path_flag_overrides_the_pyproject_value(
     (repo / "other_pkg" / "thing.py").write_text("", encoding="utf-8")
     code, out, _ = call("targets", "--package-path", "other_pkg", "other_pkg/thing.py")
     assert code == 0
-    assert out.splitlines() == ["scoped", "other_pkg.thing.*", "other_pkg/thing.py"]
+    assert out.splitlines() == [
+        "scoped",
+        "other_pkg.thing.*",
+        "other_pkg/thing.py",
+        "",
+    ]
 
 
 def test_package_dotted_flag_overrides_the_derived_name(repo: Path) -> None:
@@ -337,4 +343,4 @@ def test_main_defaults_to_sys_argv(
 ) -> None:
     monkeypatch.setattr("sys.argv", ["mutmut-ratchet", "targets", "README.md"])
     assert main() == 0
-    assert capsys.readouterr().out == "scoped\n\n\n"
+    assert capsys.readouterr().out == "scoped\n\n\n\n"
