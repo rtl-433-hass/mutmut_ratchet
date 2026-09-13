@@ -30,6 +30,7 @@ from . import (
 from .config import (
     DEFAULT_TOLERANCE_FRACTION,
     DEFAULT_TOLERANCE_MUTANTS,
+    DEFAULT_TOLERANCE_SURVIVORS,
     Config,
     ConfigError,
     load_config,
@@ -240,6 +241,7 @@ def _dispatch(
             args.shard,
             args.of,
             restrict=args.restrict,
+            restrict_functions=args.restrict_functions,
             stdout=stdout,
             stderr=stderr,
         )

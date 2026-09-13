@@ -20,6 +20,7 @@ import pytest
 
 from mutmut_ratchet.config import Config
 from mutmut_ratchet.shards import (
+    functions_in,
     load_counts,
     load_timings,
     mutable_modules,
@@ -243,3 +244,78 @@ def test_timings_drive_the_split_not_mutant_counts(
     )
     shards = [shard_for(config, i, 2) for i in range(2)]
     assert [heavy] in shards
+
+
+# --- narrowing a shard to functions ------------------------------------------
+
+
+def test_functions_in_claims_only_its_own_modules(
+    repo: Path, config: Config, profile: ConsumerProfile
+) -> None:
+    """``pkg.a.x_f`` belongs to ``pkg/a.py``; ``pkg.a.b.x_f`` belongs to
+    ``pkg/a/b.py`` and must not be claimed by ``pkg/a.py``."""
+    pkg = config.package_dotted
+    flat = profile.source(profile.modules[1])
+    names = [
+        f"{pkg}.{profile.modules[1][: -len('.py')]}.x_mine",
+        f"{pkg}.{profile.modules[1][: -len('.py')]}.xǁCǁmethod",
+        f"{pkg}.somewhere.else_.x_theirs",
+    ]
+    found = functions_in(flat, names, config)
+    assert found == sorted(["x_mine", "xǁCǁmethod"]), (
+        "the module prefix is stripped, so the result feeds function_patterns_for"
+    )
+
+
+def test_functions_in_rejects_a_submodule_that_shares_the_prefix(
+    repo: Path, config: Config
+) -> None:
+    pkg = config.package_dotted
+    # `pkg.a.b.x_f` shares the `pkg.a.` prefix but `b.x_f` is not a mangled name.
+    assert functions_in(config.source("a.py"), [f"{pkg}.a.b.x_f"], config) == []
+    assert functions_in(config.source("a.py"), [f"{pkg}.a.x_f"], config) == ["x_f"]
+
+
+def test_restrict_functions_narrows_the_emitted_patterns(
+    repo: Path, config: Config, profile: ConsumerProfile
+) -> None:
+    module = profile.modules[1]
+    source = profile.source(module)
+    wanted = f"{config.package_dotted}.{module[: -len('.py')]}.x_chosen"
+
+    out = io.StringIO()
+    assert (
+        run(config, 0, 1, restrict=[source], restrict_functions=[wanted], stdout=out)
+        == 0
+    )
+    patterns, paths = out.getvalue().splitlines()
+    assert patterns == f"{wanted}__mutmut_*"
+    assert paths == source
+
+
+def test_a_module_no_function_names_keeps_its_whole_module_pattern(
+    repo: Path, config: Config, profile: ConsumerProfile
+) -> None:
+    """A partially narrowed scope must not silently drop the rest of the shard."""
+    a, b = (profile.source(m) for m in profile.modules[1:3])
+    wanted = f"{config.package_dotted}.{profile.modules[1][: -len('.py')]}.x_chosen"
+
+    out = io.StringIO()
+    assert (
+        run(config, 0, 1, restrict=[a, b], restrict_functions=[wanted], stdout=out) == 0
+    )
+    patterns, paths = out.getvalue().splitlines()
+    assert f"{wanted}__mutmut_*" in patterns.split()
+    assert patterns_for([b], config)[0] in patterns.split(), (
+        "the unnamed module keeps its whole-module pattern"
+    )
+    assert sorted(paths.split()) == sorted([a, b])
+
+
+def test_no_restrict_functions_leaves_the_old_behaviour(
+    repo: Path, config: Config
+) -> None:
+    plain, narrowed = io.StringIO(), io.StringIO()
+    assert run(config, 0, 1, stdout=plain) == 0
+    assert run(config, 0, 1, restrict_functions=[], stdout=narrowed) == 0
+    assert plain.getvalue() == narrowed.getvalue()
