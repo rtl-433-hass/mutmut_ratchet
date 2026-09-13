@@ -151,6 +151,38 @@ drift, as a local check that the committed baseline is still representative.
 per file, and refuses while regressions stand. Exit 0 pass, 1 regression/drift,
 2 missing stats or baseline.
 
+`functions` is the gate for a **function-scoped** run. A per-file score is a
+partial measurement when only some of a file's functions were mutated — the
+rest come back "not checked", counted as survived — so it cannot be compared
+against a whole-file baseline. Each mutated function's score can. Two rules:
+
+* A function already in the baseline fails only when it gains survivors beyond
+  `--tolerance-survivors` (default 0). Counting survivors rather than comparing
+  scores is what makes this *no new survivors*: a function that grows by ten
+  well-tested lines keeps its count, and touching a function that already had
+  survivors does not block the PR.
+* A function not in the baseline must reach `floor`, since there is nothing to
+  compare against and new untested code is the case the gate exists for.
+
+The default tolerance is 0 — *no new survivors* means none. The per-file band
+exists because a file's score is compared across runs and across the
+scoped/full divide, where a mutant or two genuinely moves; this gate counts
+survivors in the handful of functions a PR changed, where that does not apply.
+
+The one mechanism that looks like noise is worth being precise about: mutmut
+counts a timeout as a kill, but its budget is `(estimated_test_time +
+timeout_constant) × timeout_multiplier` — 15× plus a second, by default. A
+mutant must run an order of magnitude longer than the tests it runs under to
+trip that, which is an unbounded loop rather than a busy runner, and an
+unbounded loop trips it every time. What *could* still flip is a genuinely
+nondeterministic test, and a band would only hide that in the functions a PR is
+actively changing. Raise it per repository if a suite really does flap, and
+treat needing to as the finding it is.
+
+Rolling this onto an existing baseline is a bootstrap: with `--update`, a
+baseline that has no `functions` block records one without gating, and every
+run after that gates against it.
+
 ```
 mutmut-ratchet timings [--out PATH]
 ```

@@ -58,12 +58,24 @@ DEFAULT_TOLERANCE_MUTANTS = 3
 #: against. Also recorded in a freshly written baseline payload.
 DEFAULT_FLOOR = 0.70
 # How many extra survivors a changed function may gain before the function gate
-# fails. Zero would be the literal reading of "no new survivors", but a mutant on
-# an async path flips between killed and survived run to run (mutmut counts a
-# timeout as a kill, and timeouts are exactly what varies), so a zero band turns
-# that noise into a red PR. One absorbs the observed flip; anything larger starts
-# hiding real regressions, since most functions have only a handful of mutants.
-DEFAULT_TOLERANCE_SURVIVORS = 1
+# fails. Zero: "no new survivors" means none.
+#
+# The per-FILE band exists because a file's score is compared across runs and
+# across the scoped/full divide, where a mutant or two genuinely moves. None of
+# that applies here. This gate counts survivors in the handful of functions a PR
+# changed, and it is worth being precise about the one mechanism that looks like
+# noise: mutmut counts a timeout as a kill, but its budget is
+# ``(estimated_test_time + timeout_constant) * timeout_multiplier`` -- 15x plus a
+# second, by default. A mutant has to run an order of magnitude longer than the
+# tests it runs under to trip that, which is an unbounded loop, not a busy
+# runner; and an unbounded loop trips it every time. Timeouts are a detection,
+# not a coin flip.
+#
+# What could still flip is a genuinely nondeterministic test. A band would only
+# hide that, and hide it in the functions a PR is actively changing, which is
+# the worst place to be lenient. Raise this per repository if a suite really
+# does flap, and treat needing to as the finding it is.
+DEFAULT_TOLERANCE_SURVIVORS = 0
 # Fallback seconds-per-mutant when neither a timing nor any profile exists at all
 # (e.g. a fresh checkout with no committed timings). Only used to keep weights
 # positive; the relative split is what matters.
