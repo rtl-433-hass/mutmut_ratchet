@@ -131,14 +131,19 @@ changing the global assignment, so a scoped PR fans across the same shards.
 Exit 0, or 2 for out-of-range `--shard`/`--of`.
 
 ```
-mutmut-ratchet stats [--paths PATH ...]
+mutmut-ratchet stats [--paths PATH ...] [--functions NAME ...]
 ```
-Prints the per-file stats JSON on stdout. `--paths` is **required after a
-filtered `mutmut run`**: mutants outside the filter stay "not checked", which
-would otherwise read as 0%. Exit 0.
+Prints the stats JSON on stdout, with a `files` block and a `functions` block
+(`{path: {function: tally}}`). `--paths` is **required after a filtered `mutmut
+run`**: mutants outside the filter stay "not checked", which would otherwise
+read as 0%. `--functions` does the same for the per-function block after a
+function-scoped run — pass line 4 of `targets` output. Each function tally also
+reports `not_checked`, the subset of `survived` mutmut never executed, so a
+caller without an explicit list can still tell "no test killed this" from "this
+was never attempted". Exit 0.
 
 ```
-mutmut-ratchet ratchet --mode floor|strict --stats FILE [--baseline P] [--update] [--tolerance-fraction F] [--tolerance-mutants N]
+mutmut-ratchet ratchet --mode floor|strict|functions --stats FILE [--baseline P] [--update] [--tolerance-fraction F] [--tolerance-mutants N] [--tolerance-survivors N]
 ```
 `floor` is the CI gate (improvements never fail); `strict` also fails on upward
 drift, as a local check that the committed baseline is still representative.
