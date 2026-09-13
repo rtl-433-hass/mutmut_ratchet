@@ -17,6 +17,7 @@ import pytest
 from mutmut_ratchet.config import Config, load_config
 from mutmut_ratchet.ratchet import (
     check_floor,
+    check_functions,
     check_strict,
     run,
     score_for,
@@ -354,3 +355,248 @@ def test_write_baseline_creates_missing_directories(tmp_path: Path) -> None:
     payload = json.loads(target.read_text(encoding="utf-8"))
     assert payload["floor"] == 0.7
     assert target.read_text(encoding="utf-8").endswith("\n")
+
+
+# --- the function gate -------------------------------------------------------
+
+
+def fn_stats(path: str, functions: dict[str, dict[str, int]]) -> dict[str, object]:
+    """A stats payload carrying only the per-function block."""
+    return {"files": {}, "functions": {path: functions}}
+
+
+def write_fn_stats(
+    path: Path, source: str, functions: dict[str, dict[str, int]]
+) -> Path:
+    path.write_text(json.dumps(fn_stats(source, functions)), encoding="utf-8")
+    return path
+
+
+def write_fn_baseline(
+    config: Config, source: str, functions: dict[str, dict[str, object]]
+) -> None:
+    config.baseline.parent.mkdir(parents=True, exist_ok=True)
+    config.baseline.write_text(
+        json.dumps({"floor": 0.70, "files": {}, "functions": {source: functions}}),
+        encoding="utf-8",
+    )
+
+
+def test_a_known_function_may_keep_the_survivors_it_already_had() -> None:
+    """The point of counting survivors rather than comparing scores: touching a
+    function that was already imperfect must not fail the PR."""
+    current = {"pkg/m.py": {"x_f": {"killed": 6, "total": 10, "survived": 4}}}
+    baseline = {"functions": {"pkg/m.py": {"x_f": {"survived": 4}}}}
+    assert check_functions(current, baseline, 0.70, 0, stdout=io.StringIO()) == []
+
+
+def test_a_known_function_that_gains_survivors_fails() -> None:
+    current = {"pkg/m.py": {"x_f": {"killed": 5, "total": 10, "survived": 5}}}
+    baseline = {"functions": {"pkg/m.py": {"x_f": {"survived": 2}}}}
+    failures = check_functions(current, baseline, 0.70, 0, stdout=io.StringIO())
+    assert len(failures) == 1
+    assert "NEW SURVIVORS" in failures[0]
+    assert "pkg/m.py::x_f" in failures[0]
+
+
+def test_the_survivor_band_absorbs_a_single_flip() -> None:
+    """A timeout counting as a kill is exactly what varies run to run, so one
+    extra survivor is noise, not a regression."""
+    current = {"pkg/m.py": {"x_f": {"killed": 8, "total": 10, "survived": 2}}}
+    baseline = {"functions": {"pkg/m.py": {"x_f": {"survived": 1}}}}
+    assert check_functions(current, baseline, 0.70, 1, stdout=io.StringIO()) == []
+    # Two is past the band.
+    current["pkg/m.py"]["x_f"] = {"killed": 7, "total": 10, "survived": 3}
+    assert check_functions(current, baseline, 0.70, 1, stdout=io.StringIO()) != []
+
+
+def test_a_function_that_grows_but_stays_tested_passes() -> None:
+    """A score comparison would drift on the changed denominator; a survivor
+    count does not."""
+    current = {"pkg/m.py": {"x_f": {"killed": 30, "total": 31, "survived": 1}}}
+    baseline = {"functions": {"pkg/m.py": {"x_f": {"survived": 1, "total": 10}}}}
+    assert check_functions(current, baseline, 0.70, 0, stdout=io.StringIO()) == []
+
+
+def test_a_new_function_must_reach_the_floor() -> None:
+    """The case a mutation gate exists for: new code with no tests."""
+    current = {
+        "pkg/m.py": {"x_new": {"killed": 1, "total": 10, "survived": 9, "score": 0.1}}
+    }
+    failures = check_functions(current, {}, 0.70, 0, stdout=io.StringIO())
+    assert len(failures) == 1
+    assert "UNDER FLOOR" in failures[0]
+    assert "a new function needs tests" in failures[0]
+
+
+def test_a_well_tested_new_function_is_reported_not_failed() -> None:
+    current = {
+        "pkg/m.py": {"x_new": {"killed": 9, "total": 10, "survived": 1, "score": 0.9}}
+    }
+    out = io.StringIO()
+    assert check_functions(current, {}, 0.70, 0, stdout=out) == []
+    assert "new function (not yet in baseline)" in out.getvalue()
+
+
+def test_functions_mode_end_to_end(project: Config) -> None:
+    source = "pkg/m.py"
+    write_fn_baseline(project, source, {"x_f": {"survived": 1, "score": 0.9}})
+
+    stats = write_fn_stats(
+        Path("stats.json"), source, {"x_f": {"killed": 9, "total": 10}}
+    )
+    out, err = io.StringIO(), io.StringIO()
+    assert run(project, "functions", stats, stdout=out, stderr=err) == 0
+    assert "OK: no mutation-score regression" in out.getvalue()
+    assert "1 functions in 1 files" in out.getvalue()
+
+    # Same function, four more survivors: a regression.
+    write_fn_stats(Path("stats.json"), source, {"x_f": {"killed": 5, "total": 10}})
+    out = io.StringIO()
+    assert run(project, "functions", stats, stdout=out, stderr=io.StringIO()) == 1
+    assert "NEW SURVIVORS" in out.getvalue()
+
+
+def test_functions_mode_without_a_function_block_is_a_usage_error(
+    project: Config,
+) -> None:
+    """Silently passing would mean the gate checked nothing at all."""
+    stats = write_stats(Path("stats.json"), {"pkg/m.py": {"killed": 9, "total": 10}})
+    err = io.StringIO()
+    assert run(project, "functions", stats, stdout=io.StringIO(), stderr=err) == 2
+    assert "needs the per-function block" in err.getvalue()
+
+
+def test_update_records_functions_and_ratchets_them_upward(project: Config) -> None:
+    source = "pkg/m.py"
+    stats = write_fn_stats(
+        Path("stats.json"), source, {"x_f": {"killed": 7, "total": 10}}
+    )
+    # No baseline at all: --update creates one carrying the function block.
+    assert run(project, "functions", stats, update=True, stdout=io.StringIO()) == 0
+    payload = json.loads(project.baseline.read_text(encoding="utf-8"))
+    assert payload["functions"][source]["x_f"]["survived"] == 3
+
+    # An improvement is captured.
+    write_fn_stats(Path("stats.json"), source, {"x_f": {"killed": 10, "total": 10}})
+    assert run(project, "functions", stats, update=True, stdout=io.StringIO()) == 0
+    payload = json.loads(project.baseline.read_text(encoding="utf-8"))
+    assert payload["functions"][source]["x_f"]["survived"] == 0
+
+    # A later run that loses a mutant is a regression, not a new bar: with no
+    # band, one new survivor is one new survivor.
+    write_fn_stats(Path("stats.json"), source, {"x_f": {"killed": 9, "total": 10}})
+    out = io.StringIO()
+    assert run(project, "functions", stats, update=True, stdout=out) == 1
+    assert "NEW SURVIVORS" in out.getvalue()
+    assert "Refusing to update baseline" in out.getvalue()
+    payload = json.loads(project.baseline.read_text(encoding="utf-8"))
+    assert payload["functions"][source]["x_f"]["survived"] == 0, "bar held"
+
+    # And an equal run leaves the bar exactly where it was.
+    write_fn_stats(Path("stats.json"), source, {"x_f": {"killed": 10, "total": 10}})
+    assert run(project, "functions", stats, update=True, stdout=io.StringIO()) == 0
+    payload = json.loads(project.baseline.read_text(encoding="utf-8"))
+    assert payload["functions"][source]["x_f"]["survived"] == 0, "must ratchet upward"
+
+
+def test_a_baseline_with_no_functions_block_keeps_the_old_shape(
+    project: Config,
+) -> None:
+    """A consumer that never uses the function gate sees no schema change."""
+    stats = write_stats(Path("stats.json"), {"pkg/m.py": {"killed": 9, "total": 10}})
+    assert run(project, "floor", stats, update=True, stdout=io.StringIO()) == 0
+    payload = json.loads(project.baseline.read_text(encoding="utf-8"))
+    assert "functions" not in payload
+
+
+def test_a_baseline_without_functions_bootstraps_on_update(project: Config) -> None:
+    """Rolling the gate out onto an existing baseline must not gate the whole
+    package against the floor in one go."""
+    source = "pkg/m.py"
+    # An existing baseline of the old shape: files only.
+    write_scores(project, {source: {"killed": 5, "total": 10, "score": 0.5}})
+
+    # A poorly-covered function that WOULD fail the floor if gated as "new"
+    # (0.500 < 0.700).
+    stats = write_fn_stats(
+        Path("stats.json"), source, {"x_f": {"killed": 5, "total": 10}}
+    )
+    out = io.StringIO()
+    assert run(project, "functions", stats, update=True, stdout=out) == 0
+    assert "no per-function block yet" in out.getvalue()
+
+    payload = json.loads(project.baseline.read_text(encoding="utf-8"))
+    assert payload["functions"][source]["x_f"]["survived"] == 5
+
+    # From the next run on, the recorded block is the bar: holding still passes.
+    out = io.StringIO()
+    assert run(project, "functions", stats, stdout=out) == 0
+    # ...and losing more mutants fails, even though it is still "new-ish".
+    write_fn_stats(Path("stats.json"), source, {"x_f": {"killed": 0, "total": 10}})
+    out = io.StringIO()
+    assert run(project, "functions", stats, stdout=out) == 1
+    assert "NEW SURVIVORS" in out.getvalue()
+
+
+def _partial_stats(path: Path, source: str) -> Path:
+    """What a function-scoped run really produces: a complete function tally, and
+    a file tally swollen with the 499 mutants the filter never ran."""
+    path.write_text(
+        json.dumps(
+            {
+                "files": {
+                    source: {
+                        "killed": 9,
+                        "total": 509,
+                        "survived": 500,
+                        # The 499 the filter never ran, which is what marks
+                        # this file tally as a partial measurement.
+                        "not_checked": 499,
+                    }
+                },
+                "functions": {source: {"x_f": {"killed": 9, "total": 10}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_the_functions_summary_counts_functions_not_the_partial_file_block(
+    project: Config,
+) -> None:
+    """Reporting the file block would print a near-zero score for a run that
+    passed its gate, because the mutants the filter skipped are in it."""
+    source = "pkg/m.py"
+    write_fn_baseline(project, source, {"x_f": {"survived": 1, "score": 0.9}})
+    stats = _partial_stats(Path("stats.json"), source)
+    out = io.StringIO()
+    assert run(project, "functions", stats, stdout=out) == 0
+    assert "9/10 = 90.0%" in out.getvalue()
+
+
+def test_functions_mode_update_never_records_a_partial_file_score(
+    project: Config,
+) -> None:
+    """A partial measurement is not a bar: recorded as one, it would become the
+    floor every later whole-file run is held to."""
+    source = "pkg/m.py"
+    stats = _partial_stats(Path("stats.json"), source)
+    assert run(project, "functions", stats, update=True, stdout=io.StringIO()) == 0
+    payload = json.loads(project.baseline.read_text(encoding="utf-8"))
+    assert source not in payload["files"]
+    assert payload["functions"][source]["x_f"]["survived"] == 1
+
+
+def test_bootstrapping_requires_update(project: Config) -> None:
+    """A plain gate run against a baseline with no function block must not pass
+    silently -- that would be a gate that checked nothing."""
+    source = "pkg/m.py"
+    write_scores(project, {source: {"killed": 5, "total": 10, "score": 0.5}})
+    stats = write_fn_stats(
+        Path("stats.json"), source, {"x_f": {"killed": 1, "total": 10}}
+    )
+    out = io.StringIO()
+    assert run(project, "functions", stats, stdout=out) == 1
+    assert "UNDER FLOOR" in out.getvalue()

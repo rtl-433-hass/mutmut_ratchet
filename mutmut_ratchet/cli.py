@@ -79,7 +79,9 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_common(p_ratchet)
-    p_ratchet.add_argument("--mode", choices=("floor", "strict"), required=True)
+    p_ratchet.add_argument(
+        "--mode", choices=("floor", "strict", "functions"), required=True
+    )
     p_ratchet.add_argument(
         "--stats",
         type=Path,
@@ -98,6 +100,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help=f"absolute-mutant band (default: baseline's value or {DEFAULT_TOLERANCE_MUTANTS})",
+    )
+    p_ratchet.add_argument(
+        "--tolerance-survivors",
+        type=int,
+        default=None,
+        help=(
+            "extra survivors a changed function may gain in --mode functions "
+            f"(default: baseline's value or {DEFAULT_TOLERANCE_SURVIVORS})"
+        ),
     )
     p_ratchet.add_argument(
         "--update",
@@ -219,6 +230,7 @@ def _dispatch(
             update=args.update,
             tolerance_fraction=args.tolerance_fraction,
             tolerance_mutants=args.tolerance_mutants,
+            tolerance_survivors=args.tolerance_survivors,
             stdout=stdout,
             stderr=stderr,
         )
