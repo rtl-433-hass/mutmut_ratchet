@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/rtl-433-hass/mutmut_ratchet/compare/v0.2.0...v0.3.0) (2026-09-13)
+
+
+### Features
+
+* **timings:** record per-function seconds, not just per-file ([5f45187](https://github.com/rtl-433-hass/mutmut_ratchet/commit/5f45187d40bcb28d76233e0503439aba5ce34339))
+
 ## [0.2.0](https://github.com/rtl-433-hass/mutmut_ratchet/compare/v0.1.0...v0.2.0) (2026-09-13)
 
 
