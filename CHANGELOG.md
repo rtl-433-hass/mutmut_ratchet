@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/rtl-433-hass/mutmut_ratchet/compare/v0.4.0...v0.4.1) (2026-09-13)
+
+
+### Documentation
+
+* **shards:** correct the output contract ([#16](https://github.com/rtl-433-hass/mutmut_ratchet/issues/16)) ([119d75d](https://github.com/rtl-433-hass/mutmut_ratchet/commit/119d75d3ed02ee58f97fda913a9ff608f0467e21))
+
 ## [0.4.0](https://github.com/rtl-433-hass/mutmut_ratchet/compare/v0.3.0...v0.4.0) (2026-09-13)
 
 
