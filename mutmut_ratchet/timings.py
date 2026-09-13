@@ -22,20 +22,23 @@ falls back to a count-based estimate in the sharder.
 
 from __future__ import annotations
 
+from collections import defaultdict
 import json
 from pathlib import Path
 import sys
 from typing import IO
 
-__all__ = ["collect_timings", "run"]
+from .stats import function_of
+
+__all__ = ["collect_function_timings", "collect_timings", "run"]
 
 
-def collect_timings() -> dict[str, float]:
-    """Sum each mutable file's actual per-mutant test durations, in seconds."""
+def _durations_by_path() -> dict[str, dict[str, float]]:
+    """Map source path -> {mutant key: measured seconds}, loaded once."""
     from mutmut.__main__ import walk_mutatable_files
     from mutmut.mutation.data import SourceFileMutationData
 
-    timings: dict[str, float] = {}
+    out: dict[str, dict[str, float]] = {}
     for path in walk_mutatable_files():
         meta = Path("mutants") / (str(path) + ".meta")
         if not meta.exists():
@@ -43,10 +46,36 @@ def collect_timings() -> dict[str, float]:
         data = SourceFileMutationData(path=path)
         data.load()
         durations = getattr(data, "durations_by_key", {}) or {}
-        if not durations:
-            continue
-        timings[str(path)] = round(sum(durations.values()), 3)
-    return dict(sorted(timings.items()))
+        if durations:
+            out[str(path)] = durations
+    return out
+
+
+def collect_timings() -> dict[str, float]:
+    """Sum each mutable file's actual per-mutant test durations, in seconds."""
+    return {
+        path: round(sum(durations.values()), 3)
+        for path, durations in sorted(_durations_by_path().items())
+    }
+
+
+def collect_function_timings() -> dict[str, dict[str, float]]:
+    """The same seconds, grouped by function: ``{path: {function: seconds}}``.
+
+    A module is not the smallest thing the sharder could balance on -- mutmut
+    filters per function, so a bin can hold part of a file. It is only the
+    smallest thing it *can* balance on while the profile records nothing finer,
+    which is what leaves one oversized module setting the makespan on its own.
+    """
+    out: dict[str, dict[str, float]] = {}
+    for path, durations in sorted(_durations_by_path().items()):
+        grouped: dict[str, float] = defaultdict(float)
+        for key, seconds in durations.items():
+            grouped[function_of(key)] += seconds
+        out[path] = {
+            name: round(seconds, 3) for name, seconds in sorted(grouped.items())
+        }
+    return out
 
 
 def run(
@@ -67,14 +96,18 @@ def run(
             file=errors,
         )
         return 2
+    functions = collect_function_timings()
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(
-        json.dumps({"files": timings}, indent=2, sort_keys=True) + "\n",
+        json.dumps({"files": timings, "functions": functions}, indent=2, sort_keys=True)
+        + "\n",
         encoding="utf-8",
     )
     total = sum(timings.values())
+    n_functions = sum(len(v) for v in functions.values())
     print(
-        f"Wrote {out} ({len(timings)} files, {total:.0f}s total mutmut time).",
+        f"Wrote {out} ({len(timings)} files, {n_functions} functions, "
+        f"{total:.0f}s total mutmut time).",
         file=stream,
     )
     return 0

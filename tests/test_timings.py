@@ -10,7 +10,7 @@ from conftest import write_meta
 from consumers import ConsumerProfile
 
 from mutmut_ratchet.config import Config
-from mutmut_ratchet.timings import collect_timings, run
+from mutmut_ratchet.timings import collect_function_timings, collect_timings, run
 
 
 def test_timings_sum_each_files_mutant_durations(
@@ -58,12 +58,13 @@ def test_the_profile_is_written_sorted_with_a_summary_line(
     assert not config.timings.parent.exists()
     assert run(config.timings, stdout=out) == 0
     assert out.getvalue() == (
-        f"Wrote {config.timings} (3 files, 60s total mutmut time).\n"
+        f"Wrote {config.timings} (3 files, 3 functions, 60s total mutmut time).\n"
     )
     payload = json.loads(config.timings.read_text(encoding="utf-8"))
-    assert list(payload) == ["files"]
+    assert list(payload) == ["files", "functions"]
     assert list(payload["files"]) == sorted(payload["files"])
     assert sum(payload["files"].values()) == 60.0
+    assert list(payload["functions"]) == sorted(payload["functions"])
 
 
 def test_the_written_profile_feeds_the_sharder(
@@ -89,3 +90,55 @@ def test_an_explicit_out_path_is_honoured(
     out_path = Path("elsewhere.json")
     assert run(out_path, stdout=io.StringIO()) == 0
     assert (repo / out_path).is_file()
+
+
+# --- per-function timings ----------------------------------------------------
+
+
+def test_function_timings_sum_to_their_file(
+    repo: Path, config: Config, profile: ConsumerProfile
+) -> None:
+    """The two blocks are reductions of the same durations, so they must agree."""
+    source = profile.source(profile.modules[1])
+    mod = source[: -len(".py")].replace("/", ".")
+    write_meta(
+        repo,
+        source,
+        {
+            f"{mod}.x_a__mutmut_1": 1,
+            f"{mod}.x_a__mutmut_2": 1,
+            f"{mod}.x_b__mutmut_1": 1,
+        },
+        durations={
+            f"{mod}.x_a__mutmut_1": 3.0,
+            f"{mod}.x_a__mutmut_2": 4.0,
+            f"{mod}.x_b__mutmut_1": 5.0,
+        },
+    )
+    files = collect_timings()
+    functions = collect_function_timings()
+    assert files[source] == 12.0
+    assert functions[source] == {f"{mod}.x_a": 7.0, f"{mod}.x_b": 5.0}
+    assert sum(functions[source].values()) == files[source]
+
+
+def test_function_timings_are_what_let_a_shard_split_a_file(
+    repo: Path, config: Config, profile: ConsumerProfile
+) -> None:
+    """The point of the block: one module's weight is no longer atomic.
+
+    A file whose whole weight sits in a single function still cannot be split --
+    that is mutmut's filter granularity, not a gap here -- but a file with two
+    heavy functions can now land in two bins.
+    """
+    source = profile.source(profile.modules[1])
+    mod = source[: -len(".py")].replace("/", ".")
+    write_meta(
+        repo,
+        source,
+        {f"{mod}.x_heavy__mutmut_1": 1, f"{mod}.x_light__mutmut_1": 1},
+        durations={f"{mod}.x_heavy__mutmut_1": 90.0, f"{mod}.x_light__mutmut_1": 10.0},
+    )
+    functions = collect_function_timings()[source]
+    assert max(functions.values()) == 90.0, "the pole is the function, not the file"
+    assert collect_timings()[source] == 100.0
