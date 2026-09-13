@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mutmut-ratchet"
-version = "0.1.0"
+version = "0.2.0"
 description = "Shared mutmut CI tooling: PR scoping, time-balanced sharding, and a per-file mutation-score ratchet."
 readme = "README.md"
 requires-python = ">=3.14"
