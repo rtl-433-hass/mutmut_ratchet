@@ -3,10 +3,10 @@
 One command with five subcommands, each a drop-in replacement for the
 copy-pasted ``scripts/mutation_*.py`` helpers these tools were extracted from::
 
-    mutmut-ratchet targets <changed paths...>
-    mutmut-ratchet shards --shard 0 --of 6 [--restrict PATH...]
+    mutmut-ratchet targets [--base REF] <changed paths...>
+    mutmut-ratchet shards --shard 0 --of 6 [--restrict PATH...] [--restrict-functions NAME...]
     mutmut-ratchet stats [--paths PATH...]
-    mutmut-ratchet ratchet --mode floor --stats stats.json [--update]
+    mutmut-ratchet ratchet --mode floor|strict|functions --stats stats.json
     mutmut-ratchet timings [--out PATH]
 
 stdout and exit codes match the originals exactly, so migrating a workflow is a
@@ -128,6 +128,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="emit only the intersection of this shard with these source paths "
         "(for a scoped run); the global assignment is unchanged",
     )
+    p_shards.add_argument(
+        "--restrict-functions",
+        nargs="*",
+        default=None,
+        metavar="NAME",
+        help="narrow this shard's patterns to these fully-qualified functions "
+        "(line 4 of `targets --base`); a module none of them name keeps its "
+        "whole-module pattern",
+    )
 
     p_stats = sub.add_parser(
         "stats",
@@ -155,6 +164,14 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="*",
         metavar="PATH",
         help="changed paths (default: whitespace-separated paths on stdin)",
+    )
+    p_targets.add_argument(
+        "--base",
+        default=None,
+        help=(
+            "git ref to diff against; narrows the scope to the changed functions "
+            "rather than whole modules (omit to scope by module)"
+        ),
     )
 
     p_timings = sub.add_parser(
@@ -218,7 +235,10 @@ def _dispatch(
         return stats_mod.run(args.paths, stdout=stdout)
     if args.command == "targets":
         changed = args.changed or sys.stdin.read().split()
-        return targets_mod.run(changed, config, stdout=stdout)
+        # Without --base there is no line information, and targets falls back to
+        # whole-module scoping -- never to an empty filter. The diff itself is
+        # taken inside run(), once the scope is known to be worth diffing.
+        return targets_mod.run(changed, config, base=args.base, stdout=stdout)
     # args.command == "timings" — argparse rejects anything else.
     out = args.out if args.out is not None else config.timings
     return timings_mod.run(out, stdout=stdout, stderr=stderr)

@@ -95,11 +95,26 @@ Every subcommand also accepts `--config PYPROJECT` (default: the nearest
 `pyproject.toml` at or above the cwd), `--package-path`, and `--package-dotted`.
 
 ```
-mutmut-ratchet targets [PATH ...]
+mutmut-ratchet targets [--base REF] [PATH ...]
 ```
 Maps changed paths to targets. With no arguments, reads whitespace-separated
-paths from stdin. Prints three lines: `all` or `scoped`; the mutmut filter
-patterns; the source paths. Exit 0.
+paths from stdin. Prints four lines: `all` or `scoped`; the mutmut filter
+patterns; the source paths; and the functions the run will mutate. Exit 0.
+
+`--base REF` narrows the scope to the **changed functions** rather than whole
+modules, by diffing against `REF` and mapping each hunk to the function that
+contains it. A one-line edit to a 750-line module then mutates one function
+instead of all of it. Three rules keep that sound:
+
+* A changed line belonging to no mutable function — module-level code, an
+  import, a class body, a nested class's method — escalates that file to its
+  whole module, because such a change can affect anything in the file.
+* A source pulled in because one of its *tests* changed is never narrowed: a
+  weakened test can free a mutant anywhere in the module it exercises.
+* No line information at all (no `--base`, or git cannot answer) falls back to
+  whole modules, never to an empty filter.
+
+Function-scoped runs need `--mode functions` to gate; see below.
 
 Patterns are derived the same way `shards` derives them, so a package
 `__init__.py` in scope emits the `x_*` / `xǁ*` trampoline patterns its
