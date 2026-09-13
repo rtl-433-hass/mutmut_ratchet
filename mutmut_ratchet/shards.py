@@ -20,14 +20,15 @@ each is placed into the currently-lightest bin (ties by lowest index) — the
 classic LPT heuristic: within 4/3 of optimal makespan and, with fixed sort/tie-
 break keys, fully reproducible (no randomness, no wall-clock).
 
-**Output contract (three lines):**
+**Output contract (two lines):**
     line 1: space-separated mutmut filter patterns for the requested shard
     line 2: space-separated source paths for the requested shard
-    line 3: space-separated fully-qualified functions this shard will mutate,
-            for ``stats --functions``; empty unless ``--restrict-functions`` was
-            given, and empty too when the set could not be determined (which
-            means "do not filter the per-function block")
-All three lines are empty when the shard received no modules.
+Both lines are empty when the shard received no work.
+
+Line 2 names every file the shard touches, whether it holds all of that file or
+only some of its functions, because that is what ``stats --paths`` needs. Which
+functions a run actually measured is read back out of the stats payload rather
+than carried forward from here.
 
 Run from the repository root, e.g. for an 8-way split, the first shard::
 
