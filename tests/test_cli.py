@@ -63,12 +63,16 @@ def test_missing_or_invalid_required_flags_exit_two(argv: list[str]) -> None:
                 "baseline",
                 "tolerance_fraction",
                 "tolerance_mutants",
+                "tolerance_survivors",
                 "update",
             },
         ),
-        ("shards", {"shard", "of", "baseline", "timings", "restrict"}),
+        (
+            "shards",
+            {"shard", "of", "baseline", "timings", "restrict", "restrict_functions"},
+        ),
         ("stats", {"paths"}),
-        ("targets", {"changed"}),
+        ("targets", {"changed", "base"}),
         ("timings", {"out"}),
     ],
 )

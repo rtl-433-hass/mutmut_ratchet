@@ -18,8 +18,18 @@ from pathlib import Path
 from consumers import PROFILES, PYRTL_433, ConsumerProfile, make_repo
 import pytest
 
-from mutmut_ratchet.config import Config, load_config, patterns_for
-from mutmut_ratchet.targets import resolve, run, source_for_test
+from mutmut_ratchet.config import (
+    Config,
+    load_config,
+    module_dotted_for_mutants,
+    patterns_for,
+)
+from mutmut_ratchet.targets import (
+    changed_lines_from_diff,
+    resolve,
+    run,
+    source_for_test,
+)
 
 
 def _capture(changed: list[str], config: Config) -> list[str]:
@@ -141,16 +151,16 @@ def test_scoped_output_is_three_lines_of_patterns_and_paths(
     assert f"{config.package_dotted}.__init__.*" not in patterns.split()
 
 
-def test_full_run_output_is_all_plus_two_blank_lines(
+def test_full_run_output_is_all_plus_three_blank_lines(
     repo: Path, config: Config
 ) -> None:
-    assert _capture(["pyproject.toml"], config)[:3] == ["all", "", ""]
+    assert _capture(["pyproject.toml"], config)[:4] == ["all", "", "", ""]
 
 
 def test_nothing_in_scope_emits_scoped_with_blank_lines(
     repo: Path, config: Config
 ) -> None:
-    assert _capture(["README.md"], config)[:3] == ["scoped", "", ""]
+    assert _capture(["README.md"], config)[:4] == ["scoped", "", "", ""]
 
 
 @pytest.mark.parametrize("profile", PROFILES, ids=lambda p: p.name)
@@ -216,4 +226,132 @@ def test_scoped_patterns_never_name_an_init_module(
         "scoped",
         " ".join(e.format(pkg=pkg) for e in expected),
         changed,
+    ]
+
+
+# --- function-level narrowing ------------------------------------------------
+
+
+def _capture_narrowed(
+    changed: list[str], config: Config, changed_lines: dict[str, set[int]] | None
+) -> list[str]:
+    out = io.StringIO()
+    assert run(changed, config, changed_lines=changed_lines, stdout=out) == 0
+    return out.getvalue().split("\n")
+
+
+def test_hunk_headers_become_new_file_line_numbers() -> None:
+    diff = (
+        "diff --git a/pkg/mod.py b/pkg/mod.py\n"
+        "--- a/pkg/mod.py\n"
+        "+++ b/pkg/mod.py\n"
+        "@@ -10,0 +11,3 @@\n"
+        "+one\n+two\n+three\n"
+        "@@ -40 +43 @@\n"
+        "-old\n+new\n"
+    )
+    assert changed_lines_from_diff(diff) == {"pkg/mod.py": {11, 12, 13, 43}}
+
+
+def test_a_pure_deletion_records_both_sides_of_the_cut() -> None:
+    """``+c,0`` adds no lines, but the removal is still a change to whatever
+    contained it -- and the removed code sat *between* two surviving lines, so
+    both are recorded. Taking only the line above would blame the previous
+    function for a decorator deleted off the next one."""
+    diff = "--- a/pkg/mod.py\n+++ b/pkg/mod.py\n@@ -20,5 +19,0 @@\n-gone\n"
+    assert changed_lines_from_diff(diff) == {"pkg/mod.py": {19, 20}}
+
+
+def test_a_deleted_file_contributes_no_lines() -> None:
+    diff = "--- a/pkg/mod.py\n+++ /dev/null\n@@ -1,3 +0,0 @@\n-a\n-b\n-c\n"
+    assert changed_lines_from_diff(diff) == {}
+
+
+def test_a_directly_changed_source_narrows_to_its_functions(
+    repo: Path, config: Config, profile: ConsumerProfile
+) -> None:
+    """The whole point: a one-line edit mutates one function, not the module."""
+    source = profile.source(profile.modules[1])
+    Path(source).write_text(
+        "def alpha():\n    return 1\n\n\ndef beta():\n    return 2\n",
+        encoding="utf-8",
+    )
+    mode, patterns, paths, functions = _capture_narrowed(
+        [source], config, {source: {2}}
+    )[:4]
+    assert mode == "scoped"
+    assert paths == source
+    dotted = module_dotted_for_mutants(source, config)
+    assert patterns == f"{dotted}.x_alpha__mutmut_*"
+    assert functions == f"{dotted}.x_alpha"
+
+
+def test_a_module_level_change_still_mutates_the_whole_module(
+    repo: Path, config: Config, profile: ConsumerProfile
+) -> None:
+    """An import or constant can affect every function, so narrowing would be
+    unsound -- the patterns fall back to the whole-module form."""
+    source = profile.source(profile.modules[1])
+    Path(source).write_text(
+        "import os\n\n\ndef alpha():\n    return os\n", encoding="utf-8"
+    )
+    mode, patterns, _, functions = _capture_narrowed([source], config, {source: {1}})[
+        :4
+    ]
+    assert mode == "scoped"
+    assert patterns.split() == patterns_for([source], config)
+    # Line 4 names what the scope was narrowed *to*. This module was not, so it
+    # contributes nothing -- the shard falls back to its whole-module pattern
+    # when no name mentions it, and the gate reads what actually ran back out of
+    # the stats payload rather than being told in advance.
+    assert functions == ""
+
+
+def test_a_source_reached_through_a_changed_test_is_never_narrowed(
+    repo: Path, config: Config, profile: ConsumerProfile
+) -> None:
+    """A weakened test can free a mutant anywhere in the module it exercises,
+    not only in functions the test file happens to name."""
+    test_file, module = next(iter(profile.conforming_tests.items()))
+    source = profile.source(module)
+    Path(source).write_text(
+        "def alpha():\n    return 1\n\n\ndef beta():\n    return 2\n",
+        encoding="utf-8",
+    )
+    # Line info exists, but it is for the *test* file, not the source.
+    mode, patterns, paths, _ = _capture_narrowed([test_file], config, {test_file: {3}})[
+        :4
+    ]
+    assert mode == "scoped"
+    assert paths == source
+    assert patterns.split() == patterns_for([source], config)
+
+
+def test_no_line_information_falls_back_to_whole_modules(
+    repo: Path, config: Config, profile: ConsumerProfile
+) -> None:
+    """``git_changed_lines`` returning None must not read as 'nothing changed'."""
+    source = profile.source(profile.modules[1])
+    Path(source).write_text("def alpha():\n    return 1\n", encoding="utf-8")
+    _, patterns, _, _ = _capture_narrowed([source], config, None)[:4]
+    assert patterns.split() == patterns_for([source], config)
+
+
+def test_a_function_less_module_does_not_blank_the_function_list(
+    repo: Path, config: Config, profile: ConsumerProfile
+) -> None:
+    """A ``const.py`` of nothing but assignments has no mutable function -- which
+    is an answer, not an unknown. Reading it as "cannot determine" would blank
+    line 4 for the whole run, and an unfiltered per-function block then reports
+    every never-executed mutant of the *narrowed* files as a fresh survivor."""
+    narrowed = profile.source(profile.modules[1])
+    Path(narrowed).write_text("def alpha():\n    return 1\n", encoding="utf-8")
+    constants = profile.source(profile.modules[2])
+    Path(constants).write_text("VALUE = 1\n", encoding="utf-8")
+
+    functions = _capture_narrowed(
+        [narrowed, constants], config, {narrowed: {1}, constants: {1}}
+    )[3]
+    assert functions.split() == [
+        f"{module_dotted_for_mutants(narrowed, config)}.x_alpha"
     ]

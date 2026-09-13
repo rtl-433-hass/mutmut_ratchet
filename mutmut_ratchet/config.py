@@ -13,10 +13,13 @@ the original scripts used.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 import tomllib
 from typing import Any
+
+from .functions import MANGLED_PREFIXES, MUTANT_MARKER
 
 __all__ = [
     "DEFAULT_BASELINE",
@@ -27,10 +30,13 @@ __all__ = [
     "DEFAULT_TIMINGS",
     "DEFAULT_TOLERANCE_FRACTION",
     "DEFAULT_TOLERANCE_MUTANTS",
+    "DEFAULT_TOLERANCE_SURVIVORS",
     "Config",
     "ConfigError",
     "find_pyproject",
     "load_config",
+    "function_patterns_for",
+    "module_dotted_for_mutants",
     "patterns_for",
 ]
 
@@ -48,8 +54,16 @@ DEFAULT_PRECISION = 6
 #   coordinator), absorbing their proportionally larger run-to-run drift.
 DEFAULT_TOLERANCE_FRACTION = 0.02
 DEFAULT_TOLERANCE_MUTANTS = 3
-#: Advisory floor recorded in a freshly written baseline payload.
+#: Score a function must reach when it is new and has no baseline to compare
+#: against. Also recorded in a freshly written baseline payload.
 DEFAULT_FLOOR = 0.70
+# How many extra survivors a changed function may gain before the function gate
+# fails. Zero would be the literal reading of "no new survivors", but a mutant on
+# an async path flips between killed and survived run to run (mutmut counts a
+# timeout as a kill, and timeouts are exactly what varies), so a zero band turns
+# that noise into a red PR. One absorbs the observed flip; anything larger starts
+# hiding real regressions, since most functions have only a handful of mutants.
+DEFAULT_TOLERANCE_SURVIVORS = 1
 # Fallback seconds-per-mutant when neither a timing nor any profile exists at all
 # (e.g. a fresh checkout with no committed timings). Only used to keep weights
 # positive; the relative split is what matters.
@@ -80,6 +94,7 @@ class Config:
     explicit_test_sources: dict[str, list[str]] = field(default_factory=dict)
     tolerance_fraction: float = DEFAULT_TOLERANCE_FRACTION
     tolerance_mutants: int = DEFAULT_TOLERANCE_MUTANTS
+    tolerance_survivors: int = DEFAULT_TOLERANCE_SURVIVORS
     precision: int = DEFAULT_PRECISION
     floor: float = DEFAULT_FLOOR
     fallback_seconds_per_mutant: float = DEFAULT_FALLBACK_SECONDS_PER_MUTANT
@@ -92,6 +107,30 @@ class Config:
         """Dotted mutmut module name for a repo-relative source ``path``."""
         stem = path[len(self.package_path) + 1 : -len(".py")]
         return f"{self.package_dotted}.{stem.replace('/', '.')}"
+
+
+def module_dotted_for_mutants(path: str, config: Config) -> str:
+    """The dotted prefix a file's mutant names actually carry.
+
+    ``get_mutant_name`` strips the ``__init__`` segment, so a package root's
+    mutants live directly under the package's dotted name. Everything that builds
+    a filter pattern needs this same adjustment.
+    """
+    return config.dotted(path).removesuffix(".__init__")
+
+
+def function_patterns_for(
+    path: str, functions: Iterable[str], config: Config
+) -> list[str]:
+    """Filter patterns selecting exactly ``functions`` within ``path``.
+
+    ``functions`` are mutmut's mangled names (``x_foo``, ``xǁCǁbar``). The
+    ``__mutmut_`` marker is part of the pattern so a function never matches one
+    whose name merely extends it -- ``x_parse__mutmut_*`` cannot catch
+    ``x_parse_header__mutmut_1``.
+    """
+    dotted = module_dotted_for_mutants(path, config)
+    return [f"{dotted}.{name}{MUTANT_MARKER}*" for name in sorted(functions)]
 
 
 def patterns_for(paths: list[str], config: Config) -> list[str]:
@@ -112,9 +151,9 @@ def patterns_for(paths: list[str], config: Config) -> list[str]:
     patterns: list[str] = []
     for p in paths:
         dotted = config.dotted(p)
-        if dotted.endswith(".__init__"):
-            base = dotted[: -len(".__init__")]
-            patterns += [f"{base}.x_*", f"{base}.xǁ*"]
+        base = module_dotted_for_mutants(p, config)
+        if base != dotted:
+            patterns += [f"{base}.{prefix}*" for prefix in MANGLED_PREFIXES]
         else:
             patterns.append(f"{dotted}.*")
     return patterns
@@ -131,6 +170,7 @@ _KEYS: dict[str, type | tuple[type, ...]] = {
     "explicit_test_sources": dict,
     "tolerance_fraction": (int, float),
     "tolerance_mutants": int,
+    "tolerance_survivors": int,
     "precision": int,
     "floor": (int, float),
     "fallback_seconds_per_mutant": (int, float),
@@ -265,6 +305,9 @@ def load_config(
         ),
         tolerance_mutants=int(
             merged.get("tolerance_mutants", DEFAULT_TOLERANCE_MUTANTS)
+        ),
+        tolerance_survivors=int(
+            merged.get("tolerance_survivors", DEFAULT_TOLERANCE_SURVIVORS)
         ),
         precision=int(merged.get("precision", DEFAULT_PRECISION)),
         floor=float(merged.get("floor", DEFAULT_FLOOR)),
