@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.0](https://github.com/rtl-433-hass/mutmut_ratchet/compare/v0.1.0...v0.2.0) (2026-09-13)
+
+
+### Features
+
+* **ratchet:** gate a function-scoped run on new survivors ([9173ea7](https://github.com/rtl-433-hass/mutmut_ratchet/commit/9173ea7a6a6abb45e32dba6037551228c3891ec0))
+* **shards:** let a shard narrow its patterns to named functions ([be04ab7](https://github.com/rtl-433-hass/mutmut_ratchet/commit/be04ab73aacba8ff659de2f902e4e52fb38e686e))
+* **stats:** tally mutants per function, not just per file ([78ce8e9](https://github.com/rtl-433-hass/mutmut_ratchet/commit/78ce8e99ed10750eb08385cb1b97da4e67658cb5))
+* **targets:** scope a PR's mutation run to its changed functions ([1d3b4f9](https://github.com/rtl-433-hass/mutmut_ratchet/commit/1d3b4f94bae74c360c91a71ecb2122b63f4c7881))
+
 ## 0.1.0 (2026-09-02)
 
 
