@@ -15,7 +15,7 @@ from conftest import write_meta
 from consumers import ConsumerProfile
 import pytest
 
-from mutmut_ratchet.stats import collect_stats, run
+from mutmut_ratchet.stats import collect_function_stats, collect_stats, function_of, run
 
 # mutmut's exit-code table, by the status each code maps to.
 KILLED, SURVIVED, NO_TESTS = 1, 0, 5
@@ -58,6 +58,8 @@ def test_every_mutmut_status_lands_in_the_right_bucket(
             "skipped": 2,
             "no_tests": 1,
             "total": 12,
+            # s2 alone: recorded but never run, a subset of the 3 survivors.
+            "not_checked": 1,
         }
     }
 
@@ -95,8 +97,9 @@ def test_output_is_sorted_json_on_stdout(repo: Path, profile: ConsumerProfile) -
     text = out.getvalue()
     assert text.endswith("\n")
     payload = json.loads(text)
-    assert list(payload) == ["files"]
+    assert list(payload) == ["files", "functions"]
     assert list(payload["files"]) == sorted(payload["files"])
+    assert list(payload["functions"]) == sorted(payload["functions"])
     assert all(
         set(f)
         == {
@@ -107,6 +110,7 @@ def test_output_is_sorted_json_on_stdout(repo: Path, profile: ConsumerProfile) -
             "skipped",
             "no_tests",
             "total",
+            "not_checked",
         }
         for f in payload["files"].values()
     )
@@ -126,3 +130,115 @@ def test_stats_are_ratchet_ready(repo: Path, profile: ConsumerProfile) -> None:
 @pytest.mark.parametrize("bad", ["not-a-module.py"])
 def test_paths_naming_an_unmutated_module_yields_nothing(repo: Path, bad: str) -> None:
     assert collect_stats([bad]) == {}
+
+
+@pytest.mark.parametrize(
+    ("key", "expected"),
+    [
+        ("pkg.mod.x_parse__mutmut_1", "pkg.mod.x_parse"),
+        ("pkg.mod.x_parse__mutmut_137", "pkg.mod.x_parse"),
+        ("pkg.mod.xǁCoordinatorǁrefresh__mutmut_2", "pkg.mod.xǁCoordinatorǁrefresh"),
+        # A key mutmut itself would assert on degrades to its own function rather
+        # than raising in the middle of a CI gate.
+        ("hand_written_key", "hand_written_key"),
+    ],
+)
+def test_function_of_splits_on_the_mutant_marker(key: str, expected: str) -> None:
+    assert function_of(key) == expected
+
+
+def test_function_stats_group_mutants_by_their_function(
+    repo: Path, profile: ConsumerProfile
+) -> None:
+    """Each function's tally is complete on its own, which is what lets a
+    function-scoped run be gated when the enclosing file's score cannot be."""
+    source = profile.source(profile.modules[1])
+    mod = source[: -len(".py")].replace("/", ".")
+    write_meta(
+        repo,
+        source,
+        {
+            f"{mod}.x_parse__mutmut_1": KILLED,
+            f"{mod}.x_parse__mutmut_2": KILLED,
+            f"{mod}.x_parse__mutmut_3": SURVIVED,
+            f"{mod}.xǁCǁrun__mutmut_1": SURVIVED,
+        },
+    )
+    stats = collect_function_stats()
+    assert set(stats[source]) == {f"{mod}.x_parse", f"{mod}.xǁCǁrun"}
+    assert stats[source][f"{mod}.x_parse"]["killed"] == 2
+    assert stats[source][f"{mod}.x_parse"]["survived"] == 1
+    assert stats[source][f"{mod}.x_parse"]["total"] == 3
+    assert stats[source][f"{mod}.xǁCǁrun"]["killed"] == 0
+    assert stats[source][f"{mod}.xǁCǁrun"]["total"] == 1
+
+
+def test_a_function_the_run_skipped_is_reported_but_flagged(
+    repo: Path, profile: ConsumerProfile
+) -> None:
+    """A function-scoped run leaves the rest of the file "not checked". Those
+    are reported faithfully -- this exporter never hides a mutant -- but the
+    flag is what lets the gate tell them from real survivors, with no
+    out-of-band list of what the run covered."""
+    source = profile.source(profile.modules[1])
+    mod = source[: -len(".py")].replace("/", ".")
+    write_meta(
+        repo,
+        source,
+        {
+            f"{mod}.x_touched__mutmut_1": KILLED,
+            f"{mod}.x_untouched__mutmut_1": None,
+            f"{mod}.x_untouched__mutmut_2": None,
+        },
+    )
+    every = collect_function_stats()
+    assert every[source][f"{mod}.x_touched"]["killed"] == 1
+    assert every[source][f"{mod}.x_touched"]["not_checked"] == 0
+
+    untouched = every[source][f"{mod}.x_untouched"]
+    assert untouched["survived"] == 2, "an unrun mutant still counts against us"
+    assert untouched["not_checked"] == untouched["total"], (
+        "...and being wholly unrun is what marks it as no measurement at all"
+    )
+
+
+def test_not_checked_is_a_subset_of_survived(
+    repo: Path, profile: ConsumerProfile
+) -> None:
+    """``not_checked`` never double-counts: it narrows ``survived``, so a caller
+    that ignores it still sees the conservative total."""
+    source = profile.source(profile.modules[1])
+    mod = source[: -len(".py")].replace("/", ".")
+    write_meta(
+        repo,
+        source,
+        {
+            f"{mod}.x_f__mutmut_1": SURVIVED,  # genuinely survived
+            f"{mod}.x_f__mutmut_2": None,  # never run
+        },
+    )
+    tally = collect_function_stats()[source][f"{mod}.x_f"]
+    assert tally["survived"] == 2
+    assert tally["not_checked"] == 1
+    assert tally["total"] == 2
+
+
+def test_file_and_function_tallies_agree(repo: Path, profile: ConsumerProfile) -> None:
+    """The two views are reductions of the same data, so they must add up."""
+    source = profile.source(profile.modules[1])
+    mod = source[: -len(".py")].replace("/", ".")
+    write_meta(
+        repo,
+        source,
+        {
+            f"{mod}.x_a__mutmut_1": KILLED,
+            f"{mod}.x_a__mutmut_2": SURVIVED,
+            f"{mod}.x_b__mutmut_1": TIMEOUT,
+            f"{mod}.x_b__mutmut_2": NO_TESTS,
+            f"{mod}.x_b__mutmut_3": SKIPPED,
+        },
+    )
+    whole = collect_stats()[source]
+    per_function = collect_function_stats()[source]
+    for bucket in ("killed", "survived", "timeout", "skipped", "no_tests", "total"):
+        assert whole[bucket] == sum(f[bucket] for f in per_function.values()), bucket
