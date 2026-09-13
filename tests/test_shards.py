@@ -18,17 +18,21 @@ from pathlib import Path
 from consumers import ConsumerProfile
 import pytest
 
-from mutmut_ratchet.config import Config
+from mutmut_ratchet.config import Config, module_dotted_for_mutants
 from mutmut_ratchet.shards import (
     functions_in,
     load_counts,
+    load_function_timings,
     load_timings,
     mutable_modules,
     partition,
     patterns_for,
+    patterns_for_units,
     resolve_weights,
     run,
     shard_for,
+    units_for_shard,
+    work_units,
 )
 
 
@@ -319,3 +323,119 @@ def test_no_restrict_functions_leaves_the_old_behaviour(
     assert run(config, 0, 1, stdout=plain) == 0
     assert run(config, 0, 1, restrict_functions=[], stdout=narrowed) == 0
     assert plain.getvalue() == narrowed.getvalue()
+
+
+# --- sharding by function ----------------------------------------------------
+
+
+def _profile(config: Config, files: dict, functions: dict | None = None) -> None:
+    payload: dict = {"files": files}
+    if functions is not None:
+        payload["functions"] = functions
+    config.timings.parent.mkdir(parents=True, exist_ok=True)
+    config.timings.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_without_function_timings_the_split_is_exactly_what_it_was(
+    repo: Path, config: Config, profile: ConsumerProfile
+) -> None:
+    """A consumer whose profile predates per-function seconds must be unaffected."""
+    modules = [profile.source(m) for m in profile.modules]
+    _profile(config, dict.fromkeys(modules, 10.0))
+    for shard in range(3):
+        by_unit = units_for_shard(config, shard, 3)
+        assert all(name is None for _, name in by_unit), "one unit per module"
+        assert sorted({p for p, _ in by_unit}) == shard_for(config, shard, 3)
+
+
+def test_function_timings_split_one_module_across_bins(
+    repo: Path, config: Config, profile: ConsumerProfile
+) -> None:
+    """The whole point: a module heavy enough to set the makespan is divisible."""
+    source = profile.source(profile.modules[1])
+    Path(source).write_text(
+        "def alpha():\n    return 1\n\n\ndef beta():\n    return 2\n", encoding="utf-8"
+    )
+    dotted = module_dotted_for_mutants(source, config)
+    _profile(
+        config,
+        {source: 100.0},
+        {source: {"x_alpha": 50.0, "x_beta": 50.0}},
+    )
+    modules = [source]
+    left = units_for_shard(config, 0, 2, modules=modules)
+    right = units_for_shard(config, 1, 2, modules=modules)
+    assert {u[1] for u in left} == {"x_alpha"}
+    assert {u[1] for u in right} == {"x_beta"}
+    # Each bin still names the file, because `stats --paths` needs it.
+    assert [p for p, _ in left] == [source]
+    assert patterns_for_units(left, config) == [f"{dotted}.x_alpha__mutmut_*"]
+
+
+def test_a_function_the_profile_has_not_seen_still_gets_a_bin(
+    repo: Path, config: Config, profile: ConsumerProfile
+) -> None:
+    """The trap: taking the profile's word for a file's contents would leave a
+    newly added function in no bin at all -- mutated by nobody, reported by
+    nobody. The function list comes from the source for exactly this reason."""
+    source = profile.source(profile.modules[1])
+    Path(source).write_text(
+        "def old():\n    return 1\n\n\ndef brand_new():\n    return 2\n",
+        encoding="utf-8",
+    )
+    _profile(config, {source: 100.0}, {source: {"x_old": 60.0}})
+
+    placed = {
+        u[1]
+        for shard in range(3)
+        for u in units_for_shard(config, shard, 3, modules=[source])
+    }
+    assert placed == {"x_old", "x_brand_new"}
+
+
+def test_every_unit_lands_in_exactly_one_bin(
+    repo: Path, config: Config, profile: ConsumerProfile
+) -> None:
+    """Disjoint and complete, the property the whole matrix rests on."""
+    modules = [profile.source(m) for m in profile.modules]
+    _profile(
+        config,
+        dict.fromkeys(modules, 30.0),
+        {modules[1]: {"x_a": 10.0, "x_b": 20.0}},
+    )
+    seen: list = []
+    for shard in range(4):
+        seen += units_for_shard(config, shard, 4, modules=modules)
+    assert len(seen) == len(set(seen)), "a unit appears in two bins"
+    every = set(
+        work_units(
+            modules, dict.fromkeys(modules, 30.0), load_function_timings(config.timings)
+        )
+    )
+    assert set(seen) == every
+
+
+def test_restrict_functions_narrows_a_whole_module_unit(
+    repo: Path, config: Config, profile: ConsumerProfile
+) -> None:
+    """Filtering it out instead would run nothing at all for that module, which
+    is the one outcome a scoping bug must never produce."""
+    source = profile.source(profile.modules[1])
+    Path(source).write_text(
+        "def alpha():\n    return 1\n\n\ndef beta():\n    return 2\n", encoding="utf-8"
+    )
+    _profile(config, {source: 100.0})  # no functions block -> one whole unit
+    dotted = module_dotted_for_mutants(source, config)
+
+    found = []
+    for shard in range(2):
+        found += units_for_shard(
+            config,
+            shard,
+            2,
+            restrict=[source],
+            restrict_functions=[f"{dotted}.x_alpha"],
+            modules=[source],
+        )
+    assert found, "the module must still run something"
+    assert {u[1] for u in found} == {"x_alpha"}
