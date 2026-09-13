@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/rtl-433-hass/mutmut_ratchet/compare/v0.3.0...v0.4.0) (2026-09-13)
+
+
+### Features
+
+* **shards:** bin-pack functions, not just modules ([#14](https://github.com/rtl-433-hass/mutmut_ratchet/issues/14)) ([47f94f6](https://github.com/rtl-433-hass/mutmut_ratchet/commit/47f94f66f6ca8ac3f29c089c44e71e500cc91f3d))
+
 ## [0.3.0](https://github.com/rtl-433-hass/mutmut_ratchet/compare/v0.2.0...v0.3.0) (2026-09-13)
 
 
