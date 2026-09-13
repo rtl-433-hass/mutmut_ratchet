@@ -221,6 +221,7 @@ def work_units(
     modules: list[str],
     module_weights: dict[str, float],
     function_timings: dict[str, dict[str, float]],
+    config: Config,
 ) -> dict[Unit, float]:
     """Weighted units to bin-pack: per function where measured, else per module.
 
@@ -255,11 +256,21 @@ def work_units(
             # rather than emit a filter that covers only part of it.
             units[(path, None)] = whole
             continue
-        unprofiled = [name for name in names if name not in profiled]
-        spare = max(whole - sum(profiled.values()), 0.0)
+        # The profile keys functions the way mutmut names mutants -- fully
+        # qualified -- while a unit holds the bare mangled name that
+        # `function_patterns_for` wants. Bridge the two here rather than let a
+        # silent miss weight every function at zero.
+        prefix = f"{module_dotted_for_mutants(path, config)}."
+        by_bare = {
+            name[len(prefix) :]: secs
+            for name, secs in profiled.items()
+            if name.startswith(prefix)
+        }
+        unprofiled = [name for name in names if name not in by_bare]
+        spare = max(whole - sum(by_bare.values()), 0.0)
         each = spare / len(unprofiled) if unprofiled else 0.0
         for name in names:
-            units[(path, name)] = profiled.get(name, each)
+            units[(path, name)] = by_bare.get(name, each)
     return units
 
 
@@ -298,7 +309,7 @@ def units_for_shard(
         config.fallback_seconds_per_mutant,
     )
     units = work_units(
-        all_modules, module_weights, load_function_timings(config.timings)
+        all_modules, module_weights, load_function_timings(config.timings), config
     )
     mine = partition_units(of, units)[shard]
 

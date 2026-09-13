@@ -360,7 +360,7 @@ def test_function_timings_split_one_module_across_bins(
     _profile(
         config,
         {source: 100.0},
-        {source: {"x_alpha": 50.0, "x_beta": 50.0}},
+        {source: {f"{dotted}.x_alpha": 50.0, f"{dotted}.x_beta": 50.0}},
     )
     modules = [source]
     left = units_for_shard(config, 0, 2, modules=modules)
@@ -383,7 +383,8 @@ def test_a_function_the_profile_has_not_seen_still_gets_a_bin(
         "def old():\n    return 1\n\n\ndef brand_new():\n    return 2\n",
         encoding="utf-8",
     )
-    _profile(config, {source: 100.0}, {source: {"x_old": 60.0}})
+    dotted = module_dotted_for_mutants(source, config)
+    _profile(config, {source: 100.0}, {source: {f"{dotted}.x_old": 60.0}})
 
     placed = {
         u[1]
@@ -401,7 +402,12 @@ def test_every_unit_lands_in_exactly_one_bin(
     _profile(
         config,
         dict.fromkeys(modules, 30.0),
-        {modules[1]: {"x_a": 10.0, "x_b": 20.0}},
+        {
+            modules[1]: {
+                f"{module_dotted_for_mutants(modules[1], config)}.x_a": 10.0,
+                f"{module_dotted_for_mutants(modules[1], config)}.x_b": 20.0,
+            }
+        },
     )
     seen: list = []
     for shard in range(4):
@@ -409,7 +415,10 @@ def test_every_unit_lands_in_exactly_one_bin(
     assert len(seen) == len(set(seen)), "a unit appears in two bins"
     every = set(
         work_units(
-            modules, dict.fromkeys(modules, 30.0), load_function_timings(config.timings)
+            modules,
+            dict.fromkeys(modules, 30.0),
+            load_function_timings(config.timings),
+            config,
         )
     )
     assert set(seen) == every
