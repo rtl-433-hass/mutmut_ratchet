@@ -58,17 +58,23 @@ from .config import (
     module_dotted_for_mutants,
     patterns_for,
 )
-from .functions import MANGLED_PREFIXES
+from .functions import MANGLED_PREFIXES, mutable_functions
 
 __all__ = [
+    "Unit",
     "functions_in",
+    "load_function_timings",
     "load_counts",
     "load_timings",
     "mutable_modules",
     "partition",
+    "partition_units",
+    "patterns_for_units",
     "patterns_for",
     "resolve_weights",
     "run",
+    "units_for_shard",
+    "work_units",
 ]
 
 
@@ -195,6 +201,162 @@ def functions_in(path: str, functions: Iterable[str], config: Config) -> list[st
     return sorted(found)
 
 
+#: One unit of shardable work: a function, or a whole module when no per-function
+#: weight is available for it. ``(path, mangled name | None)``.
+Unit = tuple[str, str | None]
+
+
+def load_function_timings(timings: Path) -> dict[str, dict[str, float]]:
+    """Map module path -> {mangled function: measured seconds}, when profiled."""
+    if not timings.exists():
+        return {}
+    data = json.loads(timings.read_text(encoding="utf-8"))
+    return {
+        path: {name: float(secs) for name, secs in functions.items()}
+        for path, functions in data.get("functions", {}).items()
+    }
+
+
+def work_units(
+    modules: list[str],
+    module_weights: dict[str, float],
+    function_timings: dict[str, dict[str, float]],
+    config: Config,
+) -> dict[Unit, float]:
+    """Weighted units to bin-pack: per function where measured, else per module.
+
+    A module is only as divisible as the profile is detailed. With per-function
+    seconds it contributes one unit per function, so a single oversized module no
+    longer sets the makespan on its own; without them it contributes one unit and
+    the split is exactly what it always was.
+
+    The function list comes from the *source*, not from the profile, and that
+    matters: a function added since the profile was written has no recorded
+    weight, and taking the profile's word for the file's contents would leave it
+    in no bin at all -- mutated by nobody, reported by nobody. Instead the
+    unprofiled functions share whatever the module's measured total does not
+    already account for, which is both a sane estimate and, more importantly,
+    a bin.
+    """
+    units: dict[Unit, float] = {}
+    for path in modules:
+        whole = module_weights.get(path, 0.0)
+        profiled = function_timings.get(path)
+        if not profiled:
+            units[(path, None)] = whole
+            continue
+        try:
+            source = Path(path).read_text(encoding="utf-8")
+        except OSError:
+            units[(path, None)] = whole
+            continue
+        names = mutable_functions(source)
+        if not names:
+            # Unreadable, unparseable, or genuinely function-free: keep it whole
+            # rather than emit a filter that covers only part of it.
+            units[(path, None)] = whole
+            continue
+        # The profile keys functions the way mutmut names mutants -- fully
+        # qualified -- while a unit holds the bare mangled name that
+        # `function_patterns_for` wants. Bridge the two here rather than let a
+        # silent miss weight every function at zero.
+        prefix = f"{module_dotted_for_mutants(path, config)}."
+        by_bare = {
+            name[len(prefix) :]: secs
+            for name, secs in profiled.items()
+            if name.startswith(prefix)
+        }
+        unprofiled = [name for name in names if name not in by_bare]
+        spare = max(whole - sum(by_bare.values()), 0.0)
+        each = spare / len(unprofiled) if unprofiled else 0.0
+        for name in names:
+            units[(path, name)] = by_bare.get(name, each)
+    return units
+
+
+def partition_units(n: int, units: dict[Unit, float]) -> list[list[Unit]]:
+    """Bin-pack units the same deterministic LPT way :func:`partition` packs modules."""
+    order = sorted(units, key=lambda u: (-units[u], u[0], u[1] or ""))
+    bins: list[list[Unit]] = [[] for _ in range(n)]
+    loads = [0.0] * n
+    for unit in order:
+        j = min(range(n), key=lambda k: (loads[k], k))
+        bins[j].append(unit)
+        loads[j] += units[unit]
+    return [sorted(b, key=lambda u: (u[0], u[1] or "")) for b in bins]
+
+
+def units_for_shard(
+    config: Config,
+    shard: int,
+    of: int,
+    *,
+    restrict: list[str] | None = None,
+    restrict_functions: list[str] | None = None,
+    modules: list[str] | None = None,
+) -> list[Unit]:
+    """The units assigned to ``shard``, after any scoping.
+
+    The partition is computed over every unit first, so a unit keeps its shard
+    whatever the scope -- the property that lets a scoped run reuse the same
+    matrix as a full one.
+    """
+    all_modules = mutable_modules() if modules is None else modules
+    module_weights = resolve_weights(
+        all_modules,
+        load_timings(config.timings),
+        load_counts(config.baseline),
+        config.fallback_seconds_per_mutant,
+    )
+    units = work_units(
+        all_modules, module_weights, load_function_timings(config.timings), config
+    )
+    mine = partition_units(of, units)[shard]
+
+    if restrict is not None:
+        wanted = {str(Path(p)) for p in restrict}
+        mine = [u for u in mine if u[0] in wanted]
+
+    if restrict_functions:
+        named: dict[str, set[str]] = {}
+        for path in {u[0] for u in mine}:
+            found = set(functions_in(path, restrict_functions, config))
+            if found:
+                named[path] = found
+        narrowed: list[Unit] = []
+        for path, name in mine:
+            if path not in named:
+                # No name mentions this module, so it stays exactly as it was --
+                # which is what keeps a partly narrowed scope from dropping the
+                # rest of the shard.
+                narrowed.append((path, name))
+            elif name is None:
+                # A whole-module unit this shard owns, narrowed by the caller.
+                # Filtering it out instead would run *nothing* for the module,
+                # which is the one outcome a scoping bug must never produce.
+                narrowed.extend((path, n) for n in sorted(named[path]))
+            elif name in named[path]:
+                # Per-function units: the ones this shard does not own belong to
+                # another shard, so dropping them here is correct.
+                narrowed.append((path, name))
+        mine = narrowed
+    return mine
+
+
+def patterns_for_units(units: list[Unit], config: Config) -> list[str]:
+    """The mutmut filter patterns selecting exactly ``units``."""
+    patterns: list[str] = []
+    by_path: dict[str, list[str]] = {}
+    for path, name in units:
+        if name is None:
+            patterns.extend(patterns_for([path], config))
+        else:
+            by_path.setdefault(path, []).append(name)
+    for path, names in sorted(by_path.items()):
+        patterns.extend(function_patterns_for(path, names, config))
+    return patterns
+
+
 def run(
     config: Config,
     shard: int,
@@ -225,16 +387,14 @@ def run(
         )
         return 2
 
-    paths = shard_for(config, shard, of, restrict=restrict)
-
-    patterns: list[str] = []
-    for path in paths:
-        mine = functions_in(path, restrict_functions or [], config)
-        patterns.extend(
-            function_patterns_for(path, mine, config)
-            if mine
-            else patterns_for([path], config)
-        )
-    print(" ".join(patterns), file=stream)
+    units = units_for_shard(
+        config,
+        shard,
+        of,
+        restrict=restrict,
+        restrict_functions=restrict_functions,
+    )
+    paths = sorted({path for path, _ in units})
+    print(" ".join(patterns_for_units(units, config)), file=stream)
     print(" ".join(paths), file=stream)
     return 0
