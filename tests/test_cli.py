@@ -168,8 +168,10 @@ def test_timings_dispatch(repo: Path, profile: ConsumerProfile) -> None:
     )
     code, out, _ = call("timings", "--out", "t.json")
     assert code == 0
-    assert out.startswith("Wrote t.json (1 files, 3s total mutmut time).")
-    assert json.loads((repo / "t.json").read_text())["files"]
+    assert out.startswith("Wrote t.json (1 files, 1 functions, 3s total mutmut time).")
+    payload = json.loads((repo / "t.json").read_text())
+    assert payload["files"]
+    assert payload["functions"]
 
     # And with no --out it writes the configured default.
     code, out, _ = call("timings")
